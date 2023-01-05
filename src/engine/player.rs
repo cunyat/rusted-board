@@ -1,7 +1,5 @@
-use crate::engine::Move;
-
-#[derive(Debug, PartialEq)]
-pub(crate) enum Color {
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Color {
     Black,
     White,
 }
@@ -32,21 +30,11 @@ impl Player {
         }
     }
 
-    pub fn handle_move(&mut self, mv: &Move) {
-        match self.castling {
-            CastlingStatus::Available => {}
-            CastlingStatus::Unavailable | CastlingStatus::Realized => return,
-        }
-
-        if mv.is_castle() {
-            self.castling = CastlingStatus::Realized;
-        }
+    pub(crate) fn can_castle_long(&self) -> bool {
+        return true;
     }
 
-    pub(crate) fn castle_realized(&mut self) {
-        self.castling = CastlingStatus::Realized
-    }
-    pub(crate) fn castle_lost(&mut self) {
-        self.castling = CastlingStatus::Unavailable
+    pub(crate) fn can_castle_short(&self) -> bool {
+        return true;
     }
 }

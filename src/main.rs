@@ -1,51 +1,45 @@
-use crate::engine::{draw_layer, Board, Move, MoveDir, MoveKind, Piece, PieceType};
+use crate::engine::Color::{Black, White};
+use crate::engine::Kind::Pawn;
+use crate::engine::{Board, Move, MoveKind, Piece};
 
 mod engine;
 
 fn main() {
-    // for i in [
-    //     34359738368_u64,
-    // ] {
-    //     println!("{} = 1 << {}",i, i.trailing_zeros())
-    // }
-
     let mut board = Board::initial();
 
-    match board.make_move(Move::quiet(
-        Piece::White(PieceType::Pawn),
+    match board.make_move(&Move::new(
+        Piece::new(Pawn, White),
         1 << 11,
         1 << 27,
-        MoveDir::N,
+        MoveKind::Quiet,
     )) {
         Ok(_) => {}
-        Err(e) => println!("[ERROR] {}", e),
-    };
+        Err(err) => panic!("[ERROR]: {}", err),
+    }
 
-    match board.make_move(Move::quiet(
-        Piece::Black(PieceType::Pawn),
+    match board.make_move(&Move::new(
+        Piece::new(Pawn, Black),
         1 << 52,
         1 << 36,
-        MoveDir::S,
+        MoveKind::Quiet,
     )) {
         Ok(_) => {}
-        Err(e) => println!("[ERROR] {}", e),
-    };
+        Err(err) => panic!("[ERROR]: {}", err),
+    }
 
-    match board.make_move(Move::new(
-        Piece::White(PieceType::Pawn),
+    match board.make_move(&Move::new(
+        Piece::new(Pawn, White),
         1 << 27,
         1 << 36,
-        MoveDir::NE,
         MoveKind::Capture,
     )) {
         Ok(_) => {}
-        Err(e) => println!("[ERROR] {}", e),
-    };
+        Err(err) => panic!("[ERROR]: {}", err),
+    }
 
-    board.debug();
-    draw_layer(board.player_attacking_layer())
+    board.draw();
 
-    // for mv in board.generate_moves() {
-    //     engine::draw_move(&mv);
-    // }
+    for mv in board.generate_moves() {
+        mv.draw();
+    }
 }
