@@ -173,12 +173,15 @@ impl Board {
             let mut offset = layer.trailing_zeros();
 
             while offset < 64 {
-                self.get_piece_by_layer_index(idx)
-                    .potential_moves()
-                    .iter()
-                    .filter_map(|pm| self.generate_legal_moves(pm, 1 << offset))
-                    .flatten()
-                    .for_each(|mv| moves.push(mv));
+                moves.append(
+                    self.get_piece_by_layer_index(idx)
+                        .potential_moves()
+                        .iter()
+                        .filter_map(|pm| self.generate_legal_moves(pm, 1 << offset))
+                        .flatten()
+                        .collect::<Vec<Move>>()
+                        .as_mut()
+                );
 
                 offset = match layer_next_offset(&layer, offset) {
                     Some(value) => value,
