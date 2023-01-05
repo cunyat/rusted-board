@@ -29,8 +29,8 @@ impl Board {
     /// Generates the initial board for a normal game start.
     pub fn initial() -> Board {
         Board {
-            white: Player::white(),
-            black: Player::black(),
+            white: Player::new(),
+            black: Player::new(),
             turn: Turn {
                 color: Color::White,
                 number: 1,
@@ -67,6 +67,32 @@ impl Board {
         match self.turn.color {
             Color::White => &self.white,
             Color::Black => &self.black,
+        }
+    }
+
+    fn check_played_lost_castling(&mut self, mv: &Move) {
+        let player = match self.turn.color {
+            Color::White => &mut self.white,
+            Color::Black => &mut self.black,
+        };
+
+        match mv.piece.kind {
+            Kind::Rock => {
+                if player.can_castle_short() && mv.from.trailing_zeros() % 8 == 7 {
+                    player.castling_short_lost();
+                }
+
+                if player.can_castle_long() && mv.from.trailing_zeros() % 8 == 0 {
+                    player.castling_long_lost();
+                }
+            }
+            Kind::King if mv.kind == MoveKind::CastleShort => player.castling_short_realized(),
+            Kind::King if mv.kind == MoveKind::CastleLong => player.castling_long_realized(),
+            Kind::King => {
+                player.castling_short_lost();
+                player.castling_long_lost();
+            }
+            _ => {}
         }
     }
 
@@ -180,7 +206,7 @@ impl Board {
                         .filter_map(|pm| self.generate_legal_moves(pm, 1 << offset))
                         .flatten()
                         .collect::<Vec<Move>>()
-                        .as_mut()
+                        .as_mut(),
                 );
 
                 offset = match layer_next_offset(&layer, offset) {
@@ -208,12 +234,14 @@ impl Board {
         };
 
         if new_pos & self.player_pieces() != 0
+            // Pawns need to capture to move in diagonal
             || (pmove.piece.kind == Kind::Pawn
-            && pmove.dir.is_diagonal()
-            && new_pos & self.rival_pieces() == 0)
+                && pmove.dir.is_diagonal()
+                && new_pos & self.rival_pieces() == 0)
+            // Pawns can't capture in forward move
             || (pmove.piece.kind == Kind::Pawn
-            && !pmove.dir.is_diagonal()
-            && new_pos & self.rival_pieces() != 0)
+                && !pmove.dir.is_diagonal()
+                && new_pos & self.rival_pieces() != 0)
         {
             return None;
         }
@@ -225,6 +253,9 @@ impl Board {
             self.calculate_move_kind(pmove, &new_pos),
         )];
 
+        // This is a bit weird, but the `if let Some(_)..` is unstable
+        // when has boolean operators like && or || :(
+        // So we first check if piece its pawn to reduce unneeded operations for other pieces.
         if pmove.piece.kind == Kind::Pawn && pos & pawn_initial_layer(pmove.piece.color) != 0 {
             if let Some(large_pos) = apply_move(&pmove.dir, &new_pos) {
                 if large_pos & self.rival_pieces() == 0 {
@@ -273,11 +304,11 @@ impl Board {
             return MoveKind::Capture;
         }
 
-        if pmove.dir.is_castle() {
-            return MoveKind::Castle;
+        match pmove.dir {
+            Direction::CastleShort => MoveKind::CastleShort,
+            Direction::CastleLong => MoveKind::CastleLong,
+            _ => MoveKind::Quiet,
         }
-
-        return MoveKind::Quiet;
     }
 
     fn next_turn(&mut self) {
@@ -306,6 +337,12 @@ impl Board {
 
         let idx = self.get_layer_index(&mv.piece);
         self.layers[idx] = self.layers[idx] ^ mv.from ^ mv.to;
+
+        if matches!(mv.kind, MoveKind::CastleLong | MoveKind::CastleShort) {
+            self.move_rock_on_castle(mv);
+        }
+
+        self.check_played_lost_castling(&mv);
         self.next_turn();
         self.history.push(mv.clone());
 
@@ -321,41 +358,68 @@ impl Board {
 
     fn is_valid_move(&self, mv: &Move) -> Result<(), MoveError> {
         if self.get_layer(&mv.piece) & mv.from == 0 {
-            return Err(MoveError::new(
-                mv.clone(),
-                "indicated piece is not at origin position".to_string(),
-            ));
+            return move_error(mv, "indicated piece is not at origin position");
         }
 
         if self.player_pieces() & mv.to != 0 {
-            return Err(MoveError::new(
-                mv.clone(),
-                "destination already occupied by player piece".to_string(),
-            ));
+            return move_error(mv, "destination already occupied by player piece");
         }
 
         match mv.kind {
             MoveKind::Quiet => {
                 if self.all_pieces() & mv.to != 0 {
-                    return Err(MoveError::new(
-                        mv.clone(),
-                        "quiet move on occupied cell".to_string(),
-                    ));
+                    return move_error(mv, "quiet move on occupied cell");
                 }
             }
             MoveKind::Capture => {
                 if self.rival_pieces() & mv.to == 0 {
-                    return Err(MoveError::new(
-                        mv.clone(),
-                        "capturing move without rival piece in dest".to_string(),
-                    ));
+                    return move_error(mv, "capturing move without rival piece in dest");
                 }
             }
-            MoveKind::Castle => {}
+            MoveKind::CastleShort => {
+                if !(mv.from == 1 << 4 && mv.to == 1 << 6)
+                    && !(mv.from == 1 << 60 && mv.to == 1 << 62)
+                {
+                    return move_error(mv, "invalid move positions for castling");
+                }
+
+                if mv.to > mv.from && !self.player().can_castle_short() {
+                    return move_error(mv, "player has lost short castling");
+                }
+            }
+            MoveKind::CastleLong => {
+                if !(mv.from == 1 << 4 && mv.to == 1 << 2)
+                    && !(mv.from == 1 << 60 && mv.to == 1 << 58)
+                {
+                    return move_error(mv, "invalid move positions for long castling");
+                }
+
+                if mv.to < mv.from && !self.player().can_castle_long() {
+                    return move_error(mv, "player has lost long castling");
+                }
+            }
         }
 
         return Ok(());
     }
+
+    fn move_rock_on_castle(&mut self, mv: &Move) {
+        let idx = self.get_layer_index(&Piece::new(Kind::Rock, mv.piece.color));
+
+        match mv.kind {
+            MoveKind::CastleShort => {
+                self.layers[idx] = self.layers[idx] ^ (mv.from << 1) ^ (mv.from << 3)
+            }
+            MoveKind::CastleLong => {
+                self.layers[idx] = self.layers[idx] ^ (mv.from >> 1) ^ (mv.from >> 4)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn move_error(mv: &Move, msg: &str) -> Result<(), MoveError> {
+    Err(MoveError::new(mv.clone(), msg.to_string()))
 }
 
 fn layer_next_offset(layer: &u64, last: u32) -> Option<u32> {
@@ -396,38 +460,22 @@ fn apply_move(dir: &Direction, pos: &u64) -> Option<u64> {
 /// Indicates if piece would go out of the board
 /// moving in the indicated direction.
 fn moves_outside_board(dir: &Direction, position: &u64) -> bool {
-    if position & T_BORDER != 0 && dir.is_north() {
-        return true;
+    if (position & T_BORDER != 0 && dir.is_north())
+        || (position & R_BORDER != 0 && dir.is_east())
+        || (position & B_BORDER != 0 && dir.is_south())
+        || (position & L_BORDER != 0 && dir.is_west())
+    {
+        true
+    } else if dir.is_knight()
+        && ((position & (T_BORDER >> 8) != 0 && matches!(dir, Direction::NNE | Direction::NNW))
+            || (position & (R_BORDER >> 1) != 0 && matches!(dir, Direction::NEE | Direction::SEE))
+            || (position & (B_BORDER << 8) != 0 && matches!(dir, Direction::SSE | Direction::SSW))
+            || (position & (L_BORDER << 1) != 0 && matches!(dir, Direction::NWW | Direction::SWW)))
+    {
+        true
+    } else {
+        false
     }
-
-    if position & R_BORDER != 0 && dir.is_east() {
-        return true;
-    }
-
-    if position & B_BORDER != 0 && dir.is_south() {
-        return true;
-    }
-
-    if position & L_BORDER != 0 && dir.is_west() {
-        return true;
-    }
-
-    if dir.is_knight() {
-        if position & (T_BORDER >> 8) != 0 && matches!(dir, Direction::NNE | Direction::NNW) {
-            return true;
-        }
-        if position & (R_BORDER >> 1) != 0 && matches!(dir, Direction::NEE | Direction::SEE) {
-            return true;
-        }
-        if position & (B_BORDER << 8) != 0 && matches!(dir, Direction::SSE | Direction::SSW) {
-            return true;
-        }
-        if position & (L_BORDER << 1) != 0 && matches!(dir, Direction::NWW | Direction::SWW) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /// Return the offset to transform a bitmap
@@ -455,6 +503,7 @@ fn move_direction_offset(dir: &Direction) -> i32 {
     }
 }
 
+#[allow(dead_code)]
 pub fn draw_layer(p: u64) {
     let mut out = [' '; 64];
     for i in 0..64 {
@@ -488,11 +537,13 @@ const L_BORDER: u64 = 72340172838076673;
 #[cfg(test)]
 mod test {
     use crate::engine::board::{moves_outside_board, Turn};
-    use crate::engine::Board;
-    use crate::engine::Color::White;
     use crate::engine::movement::{Direction, Kind as MoveKind, Move};
     use crate::engine::piece::{Kind, Piece};
-    use crate::engine::player::{Color, Player};
+    use crate::engine::player::Player;
+    use crate::engine::Board;
+    use crate::engine::Color::{Black, White};
+    use crate::engine::Kind::{King, Rock};
+    use crate::engine::MoveKind::{Capture, Quiet};
 
     #[test]
     fn it_moves_inside_board() {
@@ -544,31 +595,31 @@ mod test {
     #[test]
     fn it_should_generate_initial_moves() {
         let board = Board::initial();
-        let pawn = Piece::new(Kind::Pawn, Color::White);
-        let knight = Piece::new(Kind::Knight, Color::White);
+        let pawn = Piece::new(Kind::Pawn, White);
+        let knight = Piece::new(Kind::Knight, White);
 
         assert_eq!(
             vec![
-                Move::new(pawn, 1 << 8, 1 << 16, MoveKind::Quiet),
-                Move::new(pawn, 1 << 8, 1 << 24, MoveKind::Quiet),
-                Move::new(pawn, 1 << 9, 1 << 17, MoveKind::Quiet),
-                Move::new(pawn, 1 << 9, 1 << 25, MoveKind::Quiet),
-                Move::new(pawn, 1 << 10, 1 << 18, MoveKind::Quiet),
-                Move::new(pawn, 1 << 10, 1 << 26, MoveKind::Quiet),
-                Move::new(pawn, 1 << 11, 1 << 19, MoveKind::Quiet),
-                Move::new(pawn, 1 << 11, 1 << 27, MoveKind::Quiet),
-                Move::new(pawn, 1 << 12, 1 << 20, MoveKind::Quiet),
-                Move::new(pawn, 1 << 12, 1 << 28, MoveKind::Quiet),
-                Move::new(pawn, 1 << 13, 1 << 21, MoveKind::Quiet),
-                Move::new(pawn, 1 << 13, 1 << 29, MoveKind::Quiet),
-                Move::new(pawn, 1 << 14, 1 << 22, MoveKind::Quiet),
-                Move::new(pawn, 1 << 14, 1 << 30, MoveKind::Quiet),
-                Move::new(pawn, 1 << 15, 1 << 23, MoveKind::Quiet),
-                Move::new(pawn, 1 << 15, 1 << 31, MoveKind::Quiet),
-                Move::new(knight, 1 << 1, 1 << 18, MoveKind::Quiet),
-                Move::new(knight, 1 << 1, 1 << 16, MoveKind::Quiet),
-                Move::new(knight, 1 << 6, 1 << 23, MoveKind::Quiet),
-                Move::new(knight, 1 << 6, 1 << 21, MoveKind::Quiet),
+                Move::new(pawn, 1 << 8, 1 << 16, Quiet),
+                Move::new(pawn, 1 << 8, 1 << 24, Quiet),
+                Move::new(pawn, 1 << 9, 1 << 17, Quiet),
+                Move::new(pawn, 1 << 9, 1 << 25, Quiet),
+                Move::new(pawn, 1 << 10, 1 << 18, Quiet),
+                Move::new(pawn, 1 << 10, 1 << 26, Quiet),
+                Move::new(pawn, 1 << 11, 1 << 19, Quiet),
+                Move::new(pawn, 1 << 11, 1 << 27, Quiet),
+                Move::new(pawn, 1 << 12, 1 << 20, Quiet),
+                Move::new(pawn, 1 << 12, 1 << 28, Quiet),
+                Move::new(pawn, 1 << 13, 1 << 21, Quiet),
+                Move::new(pawn, 1 << 13, 1 << 29, Quiet),
+                Move::new(pawn, 1 << 14, 1 << 22, Quiet),
+                Move::new(pawn, 1 << 14, 1 << 30, Quiet),
+                Move::new(pawn, 1 << 15, 1 << 23, Quiet),
+                Move::new(pawn, 1 << 15, 1 << 31, Quiet),
+                Move::new(knight, 1 << 1, 1 << 18, Quiet),
+                Move::new(knight, 1 << 1, 1 << 16, Quiet),
+                Move::new(knight, 1 << 6, 1 << 23, Quiet),
+                Move::new(knight, 1 << 6, 1 << 21, Quiet),
             ],
             board.generate_moves(),
             "board generates initial moves for white player"
@@ -576,13 +627,13 @@ mod test {
     }
 
     #[test]
-    fn piece_queen_generate_moves() {
+    fn it_generates_moves_for_queen() {
         let origin = 0b00001000 << 24;
-        let piece = Piece::new(Kind::Queen, Color::White);
+        let piece = Piece::new(Kind::Queen, White);
 
         let board = Board {
-            white: Player::white(),
-            black: Player::black(),
+            white: Player::new(),
+            black: Player::new(),
             layers: [
                 0,
                 0,
@@ -608,52 +659,245 @@ mod test {
             board.generate_moves(),
             vec![
                 // North
-                Move::new(piece, origin, 1 << 35, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 43, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 51, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 59, MoveKind::Capture),
+                Move::new(piece, origin, 1 << 35, Quiet),
+                Move::new(piece, origin, 1 << 43, Quiet),
+                Move::new(piece, origin, 1 << 51, Quiet),
+                Move::new(piece, origin, 1 << 59, Capture),
                 // North East
-                Move::new(piece, origin, 1 << 36, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 45, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 54, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 63, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 36, Quiet),
+                Move::new(piece, origin, 1 << 45, Quiet),
+                Move::new(piece, origin, 1 << 54, Quiet),
+                Move::new(piece, origin, 1 << 63, Quiet),
                 // East
-                Move::new(piece, origin, 1 << 28, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 29, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 30, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 31, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 28, Quiet),
+                Move::new(piece, origin, 1 << 29, Quiet),
+                Move::new(piece, origin, 1 << 30, Quiet),
+                Move::new(piece, origin, 1 << 31, Quiet),
                 // South East
-                Move::new(piece, origin, 1 << 20, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 13, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 6, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 20, Quiet),
+                Move::new(piece, origin, 1 << 13, Quiet),
+                Move::new(piece, origin, 1 << 6, Quiet),
                 // South
-                Move::new(piece, origin, 1 << 19, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 11, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 3, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 19, Quiet),
+                Move::new(piece, origin, 1 << 11, Quiet),
+                Move::new(piece, origin, 1 << 3, Quiet),
                 // South West
-                Move::new(piece, origin, 1 << 18, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 9, MoveKind::Quiet),
-                Move::new(piece, origin, 1, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 18, Quiet),
+                Move::new(piece, origin, 1 << 9, Quiet),
+                Move::new(piece, origin, 1, Quiet),
                 // West
-                Move::new(piece, origin, 1 << 26, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 25, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 24, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 26, Quiet),
+                Move::new(piece, origin, 1 << 25, Quiet),
+                Move::new(piece, origin, 1 << 24, Quiet),
                 // North West
-                Move::new(piece, origin, 1 << 34, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 41, MoveKind::Quiet),
-                Move::new(piece, origin, 1 << 48, MoveKind::Quiet),
+                Move::new(piece, origin, 1 << 34, Quiet),
+                Move::new(piece, origin, 1 << 41, Quiet),
+                Move::new(piece, origin, 1 << 48, Quiet),
             ]
         )
+    }
+
+    /// Generates a board without bishops, horses and queen
+    /// for testing castling mechanics
+    fn castling_board() -> Board {
+        Board {
+            white: Player::new(),
+            black: Player::new(),
+            layers: [
+                0b11111111 << 8,
+                0,
+                0,
+                0b10000001,
+                0,
+                0b00010000,
+                0b11111111 << 48,
+                0,
+                0,
+                0b10000001 << 56,
+                0,
+                0b00010000 << 56,
+            ],
+            turn: Turn {
+                color: White,
+                number: 1,
+            },
+            history: vec![],
+        }
+    }
+
+    #[test]
+    fn it_can_castle_short() {
+        let mut board = castling_board();
+
+        let w_castle = &Move::new(
+            Piece::new(King, White),
+            0b00010000,
+            0b01000000,
+            MoveKind::CastleShort,
+        );
+
+        debug_assert_eq!(
+            Some(w_castle),
+            board
+                .generate_moves()
+                .iter()
+                .find(|mv| mv.to == w_castle.to && mv.kind == MoveKind::CastleShort),
+            "generates castle move"
+        );
+
+        assert_eq!(Ok(()), board.make_move(w_castle));
+
+        assert_eq!(false, board.white.can_castle_short());
+        assert_eq!(false, board.white.can_castle_long());
+        assert_eq!(w_castle.to, board.get_layer(&w_castle.piece));
+        assert_eq!(
+            0b00100001,
+            board.get_layer(&Piece::new(Rock, White)),
+            "rock is also moved when castled"
+        );
+
+        let b_castle = &Move::new(
+            Piece::new(King, Black),
+            0b00010000 << 56,
+            0b01000000 << 56,
+            MoveKind::CastleShort,
+        );
+
+        debug_assert_eq!(
+            Some(b_castle),
+            board
+                .generate_moves()
+                .iter()
+                .find(|mv| b_castle.to == mv.to && mv.kind == MoveKind::CastleShort),
+            "generates castle move"
+        );
+
+        assert_eq!(Ok(()), board.make_move(b_castle));
+
+        assert_eq!(false, board.black.can_castle_short());
+        assert_eq!(false, board.black.can_castle_long());
+        assert_eq!(b_castle.to, board.get_layer(&b_castle.piece));
+        assert_eq!(
+            0b00100001 << 56,
+            board.get_layer(&Piece::new(Rock, Black)),
+            "rock is also moved when castled"
+        );
+    }
+
+    #[test]
+    fn it_can_castle_long() {
+        let mut board = castling_board();
+
+        let w_castle = &Move::new(
+            Piece::new(King, White),
+            0b00010000,
+            0b00000100,
+            MoveKind::CastleLong,
+        );
+
+        debug_assert_eq!(
+            Some(w_castle),
+            board
+                .generate_moves()
+                .iter()
+                .find(|mv| mv.to == w_castle.to && mv.kind == MoveKind::CastleLong),
+            "generates white's castle move"
+        );
+
+        assert_eq!(Ok(()), board.make_move(w_castle));
+
+        assert_eq!(false, board.white.can_castle_long());
+        assert_eq!(false, board.white.can_castle_short());
+        assert_eq!(w_castle.to, board.get_layer(&w_castle.piece));
+        assert_eq!(
+            0b10001000,
+            board.get_layer(&Piece::new(Rock, White)),
+            "rock is also moved when castled"
+        );
+
+        let b_castle = &Move::new(
+            Piece::new(King, Black),
+            0b00010000 << 56,
+            0b00000100 << 56,
+            MoveKind::CastleLong,
+        );
+
+        debug_assert_eq!(
+            Some(b_castle),
+            board
+                .generate_moves()
+                .iter()
+                .find(|mv| b_castle.to == mv.to && mv.kind == MoveKind::CastleLong),
+            "generates black's castle move"
+        );
+
+        assert_eq!(Ok(()), board.make_move(b_castle));
+
+        assert_eq!(false, board.black.can_castle_long());
+        assert_eq!(false, board.black.can_castle_short());
+        assert_eq!(b_castle.to, board.get_layer(&b_castle.piece));
+        assert_eq!(
+            0b10001000 << 56,
+            board.get_layer(&Piece::new(Rock, Black)),
+            "rock is also moved when castled"
+        );
+    }
+
+    #[test]
+    fn it_tracks_when_player_loses_castling() {
+        let mut board = castling_board();
+        let black_rock = Piece::new(Rock, Black);
+        let white_rock = Piece::new(Rock, White);
+
+        board
+            .make_move(&Move::new(white_rock, 1 << 7, 1 << 6, Quiet))
+            .expect("move 1 should be valid");
+        assert_eq!(false, board.white.can_castle_short());
+        assert_eq!(true, board.white.can_castle_long());
+
+        board
+            .make_move(&Move::new(black_rock, 1 << 63, 1 << 61, Quiet))
+            .expect("move 2 should be valid");
+        assert_eq!(false, board.black.can_castle_short());
+        assert_eq!(true, board.black.can_castle_long());
+
+        board
+            .make_move(&Move::new(white_rock, 1, 1 << 2, Quiet))
+            .expect("move 3 should be valid");
+        assert_eq!(false, board.white.can_castle_short());
+        assert_eq!(false, board.white.can_castle_long());
+
+        board
+            .make_move(&Move::new(black_rock, 1 << 56, 1 << 58, Quiet))
+            .expect("move 4 should be valid");
+        assert_eq!(false, board.black.can_castle_short());
+        assert_eq!(false, board.black.can_castle_long());
+
+        board = castling_board();
+
+        board
+            .make_move(&Move::new(Piece::new(King, White), 1 << 4, 1 << 5, Quiet))
+            .expect("first king's move should be valid");
+        assert_eq!(false, board.white.can_castle_short());
+        assert_eq!(false, board.white.can_castle_long());
+
+        board
+            .make_move(&Move::new(Piece::new(King, Black), 1 << 60, 1 << 61, Quiet))
+            .expect("second king's move should be valid");
+        assert_eq!(false, board.black.can_castle_short());
+        assert_eq!(false, board.black.can_castle_long());
     }
 }
 
 // Bitmap cheatsheet :D
 //
-// 56 57 58 59 60 61 62 63
-// 48 49 50 51 52 53 54 55
-// 40 41 42 43 44 45 46 47
-// 32 33 34 35 36 37 38 39
-// 24 25 26 27 28 29 30 31
-// 16 17 18 19 20 21 22 23
-// 08 09 10 11 12 13 14 15
-// 00 01 02 03 04 05 06 07
+//     H    56 57 58 59 60 61 62 63
+//     G    48 49 50 51 52 53 54 55
+//     F    40 41 42 43 44 45 46 47
+//     E    32 33 34 35 36 37 38 39
+//     D    24 25 26 27 28 29 30 31
+//     C    16 17 18 19 20 21 22 23
+//     B    08 09 10 11 12 13 14 15
+//     A    00 01 02 03 04 05 06 07
+//
+//          01 02 03 04 05 06 07 08

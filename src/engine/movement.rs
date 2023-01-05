@@ -5,7 +5,7 @@ use std::fmt::Formatter;
 use crate::engine::draw_table;
 use crate::engine::piece::Piece;
 
-/// Move represents a valid move. (it may be illegal ftm)
+/// Move represents a move.
 /// It is used for applying a movement in the board
 /// and keeping movements history.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,7 +33,8 @@ impl Move {
         out[self.to.trailing_zeros() as usize] = match self.kind {
             Kind::Quiet => 'O',
             Kind::Capture => 'X',
-            Kind::Castle => 'C',
+            Kind::CastleShort => 'C',
+            Kind::CastleLong => 'C',
         };
 
         draw_table(out);
@@ -44,7 +45,8 @@ impl Move {
 pub enum Kind {
     Quiet,
     Capture,
-    Castle,
+    CastleShort,
+    CastleLong,
 }
 
 #[derive(PartialEq, Debug)]
@@ -176,13 +178,9 @@ impl Direction {
             _ => false,
         }
     }
-
-    pub fn is_castle(&self) -> bool {
-        matches!(self, Direction::CastleShort | Direction::CastleLong)
-    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MoveError {
     mv: Move,
     reason: String,
