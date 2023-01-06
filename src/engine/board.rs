@@ -70,24 +70,31 @@ impl Board {
         }
     }
 
+    fn player_last_file_bitmap(&self) -> u64 {
+        match self.turn.color {
+            Color::White => 0xff << 56,
+            Color::Black => 0xff,
+        }
+    }
+
     fn check_played_lost_castling(&mut self, mv: &Move) {
         let player = match self.turn.color {
             Color::White => &mut self.white,
             Color::Black => &mut self.black,
         };
 
-        match mv.piece.kind {
+        match mv.piece().kind {
             Kind::Rock => {
-                if player.can_castle_short() && mv.from.trailing_zeros() % 8 == 7 {
+                if player.can_castle_short() && mv.offset_from() % 8 == 7 {
                     player.castling_short_lost();
                 }
 
-                if player.can_castle_long() && mv.from.trailing_zeros() % 8 == 0 {
+                if player.can_castle_long() && mv.offset_from() % 8 == 0 {
                     player.castling_long_lost();
                 }
             }
-            Kind::King if mv.kind == MoveKind::CastleShort => player.castling_short_realized(),
-            Kind::King if mv.kind == MoveKind::CastleLong => player.castling_long_realized(),
+            Kind::King if mv.kind() == MoveKind::CastleShort => player.castling_short_realized(),
+            Kind::King if mv.kind() == MoveKind::CastleLong => player.castling_long_realized(),
             Kind::King => {
                 player.castling_short_lost();
                 player.castling_long_lost();
@@ -133,10 +140,6 @@ impl Board {
             | self.layers[9]
             | self.layers[10]
             | self.layers[11]
-    }
-
-    fn all_pieces(&self) -> u64 {
-        self.black_pieces() | self.white_pieces()
     }
 
     /// Returns a tuple containing the index and the layer copy
@@ -246,7 +249,7 @@ impl Board {
             return None;
         }
 
-        let mut moves = vec![Move::new(
+        let mut moves = vec![Move::new_old(
             pmove.piece,
             pos,
             new_pos,
@@ -259,7 +262,7 @@ impl Board {
         if pmove.piece.kind == Kind::Pawn && pos & pawn_initial_layer(pmove.piece.color) != 0 {
             if let Some(large_pos) = apply_move(&pmove.dir, &new_pos) {
                 if large_pos & self.rival_pieces() == 0 {
-                    moves.push(Move::new(pmove.piece, pos, large_pos, MoveKind::Quiet));
+                    moves.push(Move::new_old(pmove.piece, pos, large_pos, MoveKind::Quiet));
                 }
             }
         }
@@ -276,10 +279,10 @@ impl Board {
             }
 
             if new_pos & self.rival_pieces() != 0 {
-                moves.push(Move::new(pmove.piece, *pos, new_pos, MoveKind::Capture));
+                moves.push(Move::new_old(pmove.piece, *pos, new_pos, MoveKind::Capture));
                 break;
             } else {
-                moves.push(Move::new(pmove.piece, *pos, new_pos, MoveKind::Quiet));
+                moves.push(Move::new_old(pmove.piece, *pos, new_pos, MoveKind::Quiet));
             }
 
             last_pos = new_pos
@@ -324,102 +327,190 @@ impl Board {
         }
     }
 
-    pub fn make_move(&mut self, mv: &Move) -> Result<(), MoveError> {
-        if let Err(e) = self.is_valid_move(mv) {
-            return Err(e);
-        }
+    pub fn make_move(&mut self, origin: u32, dest: u32) -> Result<Move, MoveError> {
+        let mv = match self.validate_move(origin, dest, None) {
+            Ok(mv) => mv,
+            Err(err) => return Err(err),
+        };
 
         // Applying capture before applying the move
         // to ensure we dont remove the moved piece.
-        if mv.kind == MoveKind::Capture {
-            self.apply_capture(&mv.to);
+        if mv.kind() == MoveKind::Capture {
+            self.apply_capture(&dest);
         }
 
-        let idx = self.get_layer_index(&mv.piece);
-        self.layers[idx] = self.layers[idx] ^ mv.from ^ mv.to;
+        let idx = self.get_layer_index(&mv.piece());
+        self.layers[idx] = self.layers[idx] ^ (1 << origin) ^ (1 << dest);
 
-        if matches!(mv.kind, MoveKind::CastleLong | MoveKind::CastleShort) {
-            self.move_rock_on_castle(mv);
+        if matches!(mv.kind(), MoveKind::CastleLong | MoveKind::CastleShort) {
+            self.move_rock_on_castle(&mv);
         }
 
         self.check_played_lost_castling(&mv);
         self.next_turn();
         self.history.push(mv.clone());
 
-        Ok(())
+        Ok(mv)
     }
 
-    fn apply_capture(&mut self, pos: &u64) {
+    fn apply_capture(&mut self, pos: &u32) {
         self.layers
             .iter_mut()
-            .filter(|layer| **layer & *pos != 0)
-            .for_each(|layer| layer.bitxor_assign(pos));
+            .filter(|layer| **layer & (1 << pos) != 0)
+            .for_each(|layer| layer.bitxor_assign(1 << pos));
     }
 
-    fn is_valid_move(&self, mv: &Move) -> Result<(), MoveError> {
-        if self.get_layer(&mv.piece) & mv.from == 0 {
-            return move_error(mv, "indicated piece is not at origin position");
+    fn validate_move(
+        &self,
+        origin: u32,
+        dest: u32,
+        promotion: Option<Kind>,
+    ) -> Result<Move, MoveError> {
+        if origin >= 64 || dest >= 64 {
+            return move_error("origin and destination must be in range [0, 64)");
         }
 
-        if self.player_pieces() & mv.to != 0 {
-            return move_error(mv, "destination already occupied by player piece");
+        let (borigin, bdest) = (1 << origin, 1 << dest);
+
+        let idx = match self
+            .turn_layers_range()
+            .find(|idx| self.layers[*idx] & borigin != 0)
+        {
+            None => return move_error("no piece found at origin for current player"),
+            Some(idx) => idx,
+        };
+
+        if self.player_pieces() & bdest != 0 {
+            return move_error("destination already occupied by player piece");
         }
 
-        match mv.kind {
-            MoveKind::Quiet => {
-                if self.all_pieces() & mv.to != 0 {
-                    return move_error(mv, "quiet move on occupied cell");
-                }
-            }
-            MoveKind::Capture => {
-                if self.rival_pieces() & mv.to == 0 {
-                    return move_error(mv, "capturing move without rival piece in dest");
-                }
-            }
-            MoveKind::CastleShort => {
-                if !(mv.from == 1 << 4 && mv.to == 1 << 6)
-                    && !(mv.from == 1 << 60 && mv.to == 1 << 62)
-                {
-                    return move_error(mv, "invalid move positions for castling");
-                }
+        let piece = self.get_piece_by_layer_index(idx);
+        let mut kind = MoveKind::Quiet;
+        let mut check = false;
+        let mut checkmate = false;
 
-                if mv.to > mv.from && !self.player().can_castle_short() {
-                    return move_error(mv, "player has lost short castling");
-                }
+        if self.rival_pieces() & bdest != 0 {
+            if piece.kind == Kind::Pawn && (origin.abs_diff(dest) % 8) == 0 {
+                return move_error("pawns cannot capture while advancing forward");
             }
-            MoveKind::CastleLong => {
-                if !(mv.from == 1 << 4 && mv.to == 1 << 2)
-                    && !(mv.from == 1 << 60 && mv.to == 1 << 58)
-                {
-                    return move_error(mv, "invalid move positions for long castling");
-                }
+            // todo: check if king is capturing a defended piece
 
-                if mv.to < mv.from && !self.player().can_castle_long() {
-                    return move_error(mv, "player has lost long castling");
-                }
-            }
+            kind = MoveKind::Capture;
         }
 
-        return Ok(());
+        match self.validate_king_castling(&piece, &origin, &dest, &mut kind) {
+            Err(e) => return Err(e),
+            Ok(mv_kind) => kind = mv_kind,
+        };
+
+        match self.validate_promotion(&piece, &bdest, promotion, &mut kind) {
+            Err(e) => return Err(e),
+            Ok(prom_kind) => kind = prom_kind,
+        };
+
+        // todo: validate king does not move to an attacked square
+        // todo: validate that any move does not reveal a check to king
+        // todo: promotions can also generate checks :')
+
+        Ok(Move::new(piece, origin, dest, kind, check, checkmate))
+    }
+
+    fn validate_king_castling(
+        &self,
+        piece: &Piece,
+        origin: &u32,
+        dest: &u32,
+        kind: &MoveKind,
+    ) -> Result<MoveKind, MoveError> {
+        if piece.kind != Kind::King || origin.abs_diff(*dest) != 2 {
+            return Ok(kind.clone());
+        }
+
+        // todo: validate that squares origin..=dest are not attacked.
+
+        match (origin, dest) {
+            (4, 2) | (60, 58) => {
+                if !self.player().can_castle_long() {
+                    move_error("player has lost long castling")
+                } else {
+                    Ok(MoveKind::CastleLong)
+                }
+            }
+            (4, 6) | (60, 62) => {
+                if !self.player().can_castle_long() {
+                    move_error("player has lost short castling")
+                } else {
+                    Ok(MoveKind::CastleShort)
+                }
+            }
+
+            pos => {
+                println!("{} => {}", pos.0, pos.1);
+                move_error("invalid move positions for castling")
+            }
+        }
+    }
+
+    fn validate_promotion(
+        &self,
+        piece: &Piece,
+        bdest: &u64,
+        prom: Option<Kind>,
+        mv_kind: &mut MoveKind,
+    ) -> Result<MoveKind, MoveError> {
+        if prom.is_some() && piece.kind != Kind::Pawn {
+            return move_error("only pawns can promote");
+        }
+
+        if prom.is_some() && bdest & self.player_last_file_bitmap() == 0 {
+            return move_error("promoting when not in last file");
+        }
+
+        if piece.kind != Kind::Pawn || self.player_last_file_bitmap() & bdest == 0 {
+            return Ok(mv_kind.clone());
+        }
+
+        match prom {
+            None => return move_error("missing promotion for pawn"),
+            Some(Kind::Knight) if *mv_kind == MoveKind::Capture => {
+                Ok(MoveKind::CapturingKnightPromotion)
+            }
+            Some(Kind::Bishop) if *mv_kind == MoveKind::Capture => {
+                Ok(MoveKind::CapturingBishopPromotion)
+            }
+            Some(Kind::Rock) if *mv_kind == MoveKind::Capture => {
+                Ok(MoveKind::CapturingRockPromotion)
+            }
+            Some(Kind::Queen) if *mv_kind == MoveKind::Capture => {
+                Ok(MoveKind::CapturingQueenPromotion)
+            }
+            Some(Kind::Knight) => Ok(MoveKind::KnightPromotion),
+            Some(Kind::Bishop) => Ok(MoveKind::BishopPromotion),
+            Some(Kind::Rock) => Ok(MoveKind::RockPromotion),
+            Some(Kind::Queen) => Ok(MoveKind::QueenPromotion),
+            Some(_) => return move_error("move kind must be a promotion type"),
+        }
     }
 
     fn move_rock_on_castle(&mut self, mv: &Move) {
-        let idx = self.get_layer_index(&Piece::new(Kind::Rock, mv.piece.color));
+        let idx = self.get_layer_index(&Piece::new(Kind::Rock, self.turn.color));
 
-        match mv.kind {
+        match mv.kind() {
             MoveKind::CastleShort => {
-                self.layers[idx] = self.layers[idx] ^ (mv.from << 1) ^ (mv.from << 3)
+                self.layers[idx] =
+                    self.layers[idx] ^ (mv.bitmap_from() << 1) ^ (mv.bitmap_from() << 3)
             }
             MoveKind::CastleLong => {
-                self.layers[idx] = self.layers[idx] ^ (mv.from >> 1) ^ (mv.from >> 4)
+                self.layers[idx] =
+                    self.layers[idx] ^ (mv.bitmap_from() >> 1) ^ (mv.bitmap_from() >> 4)
             }
             _ => {}
         }
     }
 }
 
-fn move_error(mv: &Move, msg: &str) -> Result<(), MoveError> {
-    Err(MoveError::new(mv.clone(), msg.to_string()))
+fn move_error<T>(msg: &str) -> Result<T, MoveError> {
+    Err(MoveError::new(msg.to_string()))
 }
 
 fn layer_next_offset(layer: &u64, last: u32) -> Option<u32> {
@@ -600,26 +691,26 @@ mod test {
 
         assert_eq!(
             vec![
-                Move::new(pawn, 1 << 8, 1 << 16, Quiet),
-                Move::new(pawn, 1 << 8, 1 << 24, Quiet),
-                Move::new(pawn, 1 << 9, 1 << 17, Quiet),
-                Move::new(pawn, 1 << 9, 1 << 25, Quiet),
-                Move::new(pawn, 1 << 10, 1 << 18, Quiet),
-                Move::new(pawn, 1 << 10, 1 << 26, Quiet),
-                Move::new(pawn, 1 << 11, 1 << 19, Quiet),
-                Move::new(pawn, 1 << 11, 1 << 27, Quiet),
-                Move::new(pawn, 1 << 12, 1 << 20, Quiet),
-                Move::new(pawn, 1 << 12, 1 << 28, Quiet),
-                Move::new(pawn, 1 << 13, 1 << 21, Quiet),
-                Move::new(pawn, 1 << 13, 1 << 29, Quiet),
-                Move::new(pawn, 1 << 14, 1 << 22, Quiet),
-                Move::new(pawn, 1 << 14, 1 << 30, Quiet),
-                Move::new(pawn, 1 << 15, 1 << 23, Quiet),
-                Move::new(pawn, 1 << 15, 1 << 31, Quiet),
-                Move::new(knight, 1 << 1, 1 << 18, Quiet),
-                Move::new(knight, 1 << 1, 1 << 16, Quiet),
-                Move::new(knight, 1 << 6, 1 << 23, Quiet),
-                Move::new(knight, 1 << 6, 1 << 21, Quiet),
+                Move::new_old(pawn, 1 << 8, 1 << 16, Quiet),
+                Move::new_old(pawn, 1 << 8, 1 << 24, Quiet),
+                Move::new_old(pawn, 1 << 9, 1 << 17, Quiet),
+                Move::new_old(pawn, 1 << 9, 1 << 25, Quiet),
+                Move::new_old(pawn, 1 << 10, 1 << 18, Quiet),
+                Move::new_old(pawn, 1 << 10, 1 << 26, Quiet),
+                Move::new_old(pawn, 1 << 11, 1 << 19, Quiet),
+                Move::new_old(pawn, 1 << 11, 1 << 27, Quiet),
+                Move::new_old(pawn, 1 << 12, 1 << 20, Quiet),
+                Move::new_old(pawn, 1 << 12, 1 << 28, Quiet),
+                Move::new_old(pawn, 1 << 13, 1 << 21, Quiet),
+                Move::new_old(pawn, 1 << 13, 1 << 29, Quiet),
+                Move::new_old(pawn, 1 << 14, 1 << 22, Quiet),
+                Move::new_old(pawn, 1 << 14, 1 << 30, Quiet),
+                Move::new_old(pawn, 1 << 15, 1 << 23, Quiet),
+                Move::new_old(pawn, 1 << 15, 1 << 31, Quiet),
+                Move::new_old(knight, 1 << 1, 1 << 18, Quiet),
+                Move::new_old(knight, 1 << 1, 1 << 16, Quiet),
+                Move::new_old(knight, 1 << 6, 1 << 23, Quiet),
+                Move::new_old(knight, 1 << 6, 1 << 21, Quiet),
             ],
             board.generate_moves(),
             "board generates initial moves for white player"
@@ -659,40 +750,40 @@ mod test {
             board.generate_moves(),
             vec![
                 // North
-                Move::new(piece, origin, 1 << 35, Quiet),
-                Move::new(piece, origin, 1 << 43, Quiet),
-                Move::new(piece, origin, 1 << 51, Quiet),
-                Move::new(piece, origin, 1 << 59, Capture),
+                Move::new_old(piece, origin, 1 << 35, Quiet),
+                Move::new_old(piece, origin, 1 << 43, Quiet),
+                Move::new_old(piece, origin, 1 << 51, Quiet),
+                Move::new_old(piece, origin, 1 << 59, Capture),
                 // North East
-                Move::new(piece, origin, 1 << 36, Quiet),
-                Move::new(piece, origin, 1 << 45, Quiet),
-                Move::new(piece, origin, 1 << 54, Quiet),
-                Move::new(piece, origin, 1 << 63, Quiet),
+                Move::new_old(piece, origin, 1 << 36, Quiet),
+                Move::new_old(piece, origin, 1 << 45, Quiet),
+                Move::new_old(piece, origin, 1 << 54, Quiet),
+                Move::new_old(piece, origin, 1 << 63, Quiet),
                 // East
-                Move::new(piece, origin, 1 << 28, Quiet),
-                Move::new(piece, origin, 1 << 29, Quiet),
-                Move::new(piece, origin, 1 << 30, Quiet),
-                Move::new(piece, origin, 1 << 31, Quiet),
+                Move::new_old(piece, origin, 1 << 28, Quiet),
+                Move::new_old(piece, origin, 1 << 29, Quiet),
+                Move::new_old(piece, origin, 1 << 30, Quiet),
+                Move::new_old(piece, origin, 1 << 31, Quiet),
                 // South East
-                Move::new(piece, origin, 1 << 20, Quiet),
-                Move::new(piece, origin, 1 << 13, Quiet),
-                Move::new(piece, origin, 1 << 6, Quiet),
+                Move::new_old(piece, origin, 1 << 20, Quiet),
+                Move::new_old(piece, origin, 1 << 13, Quiet),
+                Move::new_old(piece, origin, 1 << 6, Quiet),
                 // South
-                Move::new(piece, origin, 1 << 19, Quiet),
-                Move::new(piece, origin, 1 << 11, Quiet),
-                Move::new(piece, origin, 1 << 3, Quiet),
+                Move::new_old(piece, origin, 1 << 19, Quiet),
+                Move::new_old(piece, origin, 1 << 11, Quiet),
+                Move::new_old(piece, origin, 1 << 3, Quiet),
                 // South West
-                Move::new(piece, origin, 1 << 18, Quiet),
-                Move::new(piece, origin, 1 << 9, Quiet),
-                Move::new(piece, origin, 1, Quiet),
+                Move::new_old(piece, origin, 1 << 18, Quiet),
+                Move::new_old(piece, origin, 1 << 9, Quiet),
+                Move::new_old(piece, origin, 1, Quiet),
                 // West
-                Move::new(piece, origin, 1 << 26, Quiet),
-                Move::new(piece, origin, 1 << 25, Quiet),
-                Move::new(piece, origin, 1 << 24, Quiet),
+                Move::new_old(piece, origin, 1 << 26, Quiet),
+                Move::new_old(piece, origin, 1 << 25, Quiet),
+                Move::new_old(piece, origin, 1 << 24, Quiet),
                 // North West
-                Move::new(piece, origin, 1 << 34, Quiet),
-                Move::new(piece, origin, 1 << 41, Quiet),
-                Move::new(piece, origin, 1 << 48, Quiet),
+                Move::new_old(piece, origin, 1 << 34, Quiet),
+                Move::new_old(piece, origin, 1 << 41, Quiet),
+                Move::new_old(piece, origin, 1 << 48, Quiet),
             ]
         )
     }
@@ -729,7 +820,7 @@ mod test {
     fn it_can_castle_short() {
         let mut board = castling_board();
 
-        let w_castle = &Move::new(
+        let w_castle = Move::new_old(
             Piece::new(King, White),
             0b00010000,
             0b01000000,
@@ -737,26 +828,30 @@ mod test {
         );
 
         debug_assert_eq!(
-            Some(w_castle),
+            Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.to == w_castle.to && mv.kind == MoveKind::CastleShort),
+                .find(|mv| mv.offset_to() == w_castle.offset_to()
+                    && mv.kind() == MoveKind::CastleShort),
             "generates castle move"
         );
 
-        assert_eq!(Ok(()), board.make_move(w_castle));
+        assert_eq!(
+            Ok(w_castle),
+            board.make_move(w_castle.offset_from() as u32, w_castle.offset_to() as u32)
+        );
 
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
-        assert_eq!(w_castle.to, board.get_layer(&w_castle.piece));
+        assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b00100001,
             board.get_layer(&Piece::new(Rock, White)),
             "rock is also moved when castled"
         );
 
-        let b_castle = &Move::new(
+        let b_castle = Move::new_old(
             Piece::new(King, Black),
             0b00010000 << 56,
             0b01000000 << 56,
@@ -764,19 +859,23 @@ mod test {
         );
 
         debug_assert_eq!(
-            Some(b_castle),
+            Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.to == mv.to && mv.kind == MoveKind::CastleShort),
+                .find(|mv| b_castle.offset_to() == mv.offset_to()
+                    && mv.kind() == MoveKind::CastleShort),
             "generates castle move"
         );
 
-        assert_eq!(Ok(()), board.make_move(b_castle));
+        assert_eq!(
+            Ok(b_castle),
+            board.make_move(b_castle.offset_from() as u32, b_castle.offset_to() as u32)
+        );
 
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
-        assert_eq!(b_castle.to, board.get_layer(&b_castle.piece));
+        assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b00100001 << 56,
             board.get_layer(&Piece::new(Rock, Black)),
@@ -788,7 +887,7 @@ mod test {
     fn it_can_castle_long() {
         let mut board = castling_board();
 
-        let w_castle = &Move::new(
+        let w_castle = Move::new_old(
             Piece::new(King, White),
             0b00010000,
             0b00000100,
@@ -796,26 +895,30 @@ mod test {
         );
 
         debug_assert_eq!(
-            Some(w_castle),
+            Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.to == w_castle.to && mv.kind == MoveKind::CastleLong),
+                .find(|mv| mv.offset_to() == w_castle.offset_to()
+                    && mv.kind() == MoveKind::CastleLong),
             "generates white's castle move"
         );
 
-        assert_eq!(Ok(()), board.make_move(w_castle));
+        assert_eq!(
+            Ok(w_castle),
+            board.make_move(w_castle.offset_from() as u32, w_castle.offset_to() as u32)
+        );
 
         assert_eq!(false, board.white.can_castle_long());
         assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(w_castle.to, board.get_layer(&w_castle.piece));
+        assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b10001000,
             board.get_layer(&Piece::new(Rock, White)),
             "rock is also moved when castled"
         );
 
-        let b_castle = &Move::new(
+        let b_castle = Move::new_old(
             Piece::new(King, Black),
             0b00010000 << 56,
             0b00000100 << 56,
@@ -823,19 +926,23 @@ mod test {
         );
 
         debug_assert_eq!(
-            Some(b_castle),
+            Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.to == mv.to && mv.kind == MoveKind::CastleLong),
+                .find(|mv| b_castle.offset_to() == mv.offset_to()
+                    && mv.kind() == MoveKind::CastleLong),
             "generates black's castle move"
         );
 
-        assert_eq!(Ok(()), board.make_move(b_castle));
+        assert_eq!(
+            Ok(b_castle),
+            board.make_move(b_castle.offset_from() as u32, b_castle.offset_to() as u32)
+        );
 
         assert_eq!(false, board.black.can_castle_long());
         assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(b_castle.to, board.get_layer(&b_castle.piece));
+        assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b10001000 << 56,
             board.get_layer(&Piece::new(Rock, Black)),
@@ -846,44 +953,30 @@ mod test {
     #[test]
     fn it_tracks_when_player_loses_castling() {
         let mut board = castling_board();
-        let black_rock = Piece::new(Rock, Black);
-        let white_rock = Piece::new(Rock, White);
 
-        board
-            .make_move(&Move::new(white_rock, 1 << 7, 1 << 6, Quiet))
-            .expect("move 1 should be valid");
+        board.make_move(7, 6).expect("move 1 should be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(true, board.white.can_castle_long());
 
-        board
-            .make_move(&Move::new(black_rock, 1 << 63, 1 << 61, Quiet))
-            .expect("move 2 should be valid");
+        board.make_move(63, 61).expect("move 2 should be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(true, board.black.can_castle_long());
 
-        board
-            .make_move(&Move::new(white_rock, 1, 1 << 2, Quiet))
-            .expect("move 3 should be valid");
+        board.make_move(0, 2).expect("move 3 should be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
 
-        board
-            .make_move(&Move::new(black_rock, 1 << 56, 1 << 58, Quiet))
-            .expect("move 4 should be valid");
+        board.make_move(56, 58).expect("move 4 should be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
 
         board = castling_board();
 
-        board
-            .make_move(&Move::new(Piece::new(King, White), 1 << 4, 1 << 5, Quiet))
-            .expect("first king's move should be valid");
+        board.make_move(4, 5).expect("king's move must be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
 
-        board
-            .make_move(&Move::new(Piece::new(King, Black), 1 << 60, 1 << 61, Quiet))
-            .expect("second king's move should be valid");
+        board.make_move(60, 61).expect("king's move must be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
     }
