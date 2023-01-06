@@ -634,7 +634,7 @@ mod test {
     use crate::engine::Board;
     use crate::engine::Color::{Black, White};
     use crate::engine::Kind::{King, Rock};
-    use crate::engine::MoveKind::{Capture, Quiet};
+    use crate::engine::MoveKind::{Capture, CastleLong, CastleShort, Quiet};
 
     #[test]
     fn it_moves_inside_board() {
@@ -721,24 +721,10 @@ mod test {
     fn it_generates_moves_for_queen() {
         let origin = 0b00001000 << 24;
         let piece = Piece::new(Kind::Queen, White);
-
         let board = Board {
             white: Player::new(),
             black: Player::new(),
-            layers: [
-                0,
-                0,
-                0,
-                0,
-                0b00001000 << 24,
-                0,
-                0b00001000 << 56,
-                0,
-                0,
-                0,
-                0b00001000 << 24,
-                0,
-            ],
+            layers: [0, 0, 0, 0, 1 << 27, 0, 1 << 59, 0, 0, 0, 0, 0],
             turn: Turn {
                 color: White,
                 number: 1,
@@ -795,18 +781,18 @@ mod test {
             white: Player::new(),
             black: Player::new(),
             layers: [
-                0b11111111 << 8,
+                0xff << 8,
                 0,
                 0,
-                0b10000001,
+                0x81,
                 0,
-                0b00010000,
-                0b11111111 << 48,
+                1 << 4,
+                0xff << 48,
                 0,
                 0,
-                0b10000001 << 56,
+                0x81 << 56,
                 0,
-                0b00010000 << 56,
+                1 << 60,
             ],
             turn: Turn {
                 color: White,
@@ -820,20 +806,14 @@ mod test {
     fn it_can_castle_short() {
         let mut board = castling_board();
 
-        let w_castle = Move::new_old(
-            Piece::new(King, White),
-            0b00010000,
-            0b01000000,
-            MoveKind::CastleShort,
-        );
+        let w_castle = Move::new_old(Piece::new(King, White), 1 << 4, 1 << 6, CastleShort);
 
         debug_assert_eq!(
             Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.offset_to() == w_castle.offset_to()
-                    && mv.kind() == MoveKind::CastleShort),
+                .find(|mv| mv.offset_to() == w_castle.offset_to() && mv.kind() == CastleShort),
             "generates castle move"
         );
 
@@ -851,20 +831,14 @@ mod test {
             "rock is also moved when castled"
         );
 
-        let b_castle = Move::new_old(
-            Piece::new(King, Black),
-            0b00010000 << 56,
-            0b01000000 << 56,
-            MoveKind::CastleShort,
-        );
+        let b_castle = Move::new_old(Piece::new(King, Black), 1 << 60, 1 << 62, CastleShort);
 
         debug_assert_eq!(
             Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.offset_to() == mv.offset_to()
-                    && mv.kind() == MoveKind::CastleShort),
+                .find(|mv| b_castle.offset_to() == mv.offset_to() && mv.kind() == CastleShort),
             "generates castle move"
         );
 
@@ -887,20 +861,14 @@ mod test {
     fn it_can_castle_long() {
         let mut board = castling_board();
 
-        let w_castle = Move::new_old(
-            Piece::new(King, White),
-            0b00010000,
-            0b00000100,
-            MoveKind::CastleLong,
-        );
+        let w_castle = Move::new_old(Piece::new(King, White), 1 << 4, 1 << 2, CastleLong);
 
         debug_assert_eq!(
             Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.offset_to() == w_castle.offset_to()
-                    && mv.kind() == MoveKind::CastleLong),
+                .find(|mv| mv.offset_to() == w_castle.offset_to() && mv.kind() == CastleLong),
             "generates white's castle move"
         );
 
@@ -918,20 +886,14 @@ mod test {
             "rock is also moved when castled"
         );
 
-        let b_castle = Move::new_old(
-            Piece::new(King, Black),
-            0b00010000 << 56,
-            0b00000100 << 56,
-            MoveKind::CastleLong,
-        );
+        let b_castle = Move::new_old(Piece::new(King, Black), 1 << 60, 1 << 58, CastleLong);
 
         debug_assert_eq!(
             Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.offset_to() == mv.offset_to()
-                    && mv.kind() == MoveKind::CastleLong),
+                .find(|mv| b_castle.offset_to() == mv.offset_to() && mv.kind() == CastleLong),
             "generates black's castle move"
         );
 
@@ -984,13 +946,12 @@ mod test {
 
 // Bitmap cheatsheet :D
 //
-//     H    56 57 58 59 60 61 62 63
-//     G    48 49 50 51 52 53 54 55
-//     F    40 41 42 43 44 45 46 47
-//     E    32 33 34 35 36 37 38 39
-//     D    24 25 26 27 28 29 30 31
-//     C    16 17 18 19 20 21 22 23
-//     B    08 09 10 11 12 13 14 15
-//     A    00 01 02 03 04 05 06 07
-//
-//          01 02 03 04 05 06 07 08
+//     8    56 57 58 59 60 61 62 63
+//     7    48 49 50 51 52 53 54 55
+//     6    40 41 42 43 44 45 46 47
+//     5    32 33 34 35 36 37 38 39
+//     4    24 25 26 27 28 29 30 31
+//     3    16 17 18 19 20 21 22 23
+//     2    08 09 10 11 12 13 14 15
+//     1    00 01 02 03 04 05 06 07
+//           A  B  C  D  E  F  G  H
