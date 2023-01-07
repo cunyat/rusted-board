@@ -7,17 +7,27 @@ mod engine;
 fn main() {
     let mut board = Board::initial();
 
-    match board.make_move(11, 27) {
+    match board.make_move(11, 27, None) {
         Ok(_) => {}
         Err(err) => panic!("[ERROR]: {}", err),
     }
 
-    match board.make_move(52, 36) {
+    match board.make_move(52, 36, None) {
         Ok(_) => {}
         Err(err) => panic!("[ERROR]: {}", err),
     }
 
-    match board.make_move(6, 21) {
+    // match board.make_move(6, 21, None) {
+    //     Ok(_) => {}
+    //     Err(err) => panic!("[ERROR]: {}", err),
+    // }
+
+    match board.make_move(27, 35, None) {
+        Ok(_) => {}
+        Err(err) => panic!("[ERROR]: {}", err),
+    }
+
+    match board.make_move(50, 34, None) {
         Ok(_) => {}
         Err(err) => panic!("[ERROR]: {}", err),
     }

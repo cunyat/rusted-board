@@ -1,4 +1,4 @@
-use std::ops::{BitXorAssign, Range};
+use std::ops::{BitOrAssign, BitXorAssign, Range};
 
 use crate::engine::draw_table;
 use crate::engine::movement::{
@@ -74,6 +74,13 @@ impl Board {
         match self.turn.color {
             Color::White => 0xff << 56,
             Color::Black => 0xff,
+        }
+    }
+
+    fn player_pawn_start_file_bitmap(&self) -> u64 {
+        match self.turn.color {
+            Color::White => 0xff << 8,
+            Color::Black => 0xff << 48,
         }
     }
 
@@ -187,17 +194,24 @@ impl Board {
         }
     }
 
-    fn turn_layers_range(&self) -> Range<usize> {
+    fn player_layers_range(&self) -> Range<usize> {
         match self.turn.color {
             Color::White => 0..6,
             Color::Black => 6..12,
         }
     }
 
+    fn rival_layers_range(&self) -> Range<usize> {
+        match self.turn.color {
+            Color::Black => 0..6,
+            Color::White => 6..12,
+        }
+    }
+
     pub fn generate_moves(&self) -> Vec<Move> {
         let mut moves: Vec<Move> = vec![];
 
-        for idx in self.turn_layers_range() {
+        for idx in self.player_layers_range() {
             let layer = self.layers[idx];
             let mut offset = layer.trailing_zeros();
 
@@ -240,7 +254,11 @@ impl Board {
             // Pawns need to capture to move in diagonal
             || (pmove.piece.kind == Kind::Pawn
                 && pmove.dir.is_diagonal()
-                && new_pos & self.rival_pieces() == 0)
+                && new_pos & self.rival_pieces() == 0
+                && (
+                    self.history.is_empty()
+                    || !is_capture_en_passant(new_pos, self.history.last().unwrap()))
+            )
             // Pawns can't capture in forward move
             || (pmove.piece.kind == Kind::Pawn
                 && !pmove.dir.is_diagonal()
@@ -305,6 +323,9 @@ impl Board {
     fn calculate_move_kind(&self, pmove: &PotentialMove, pos: &u64) -> MoveKind {
         if self.rival_pieces() & pos != 0 {
             return MoveKind::Capture;
+        } else if pmove.piece.kind == Kind::Pawn && pmove.dir.is_diagonal() {
+            // Already validated
+            return MoveKind::EnPassantCapture;
         }
 
         match pmove.dir {
@@ -327,16 +348,21 @@ impl Board {
         }
     }
 
-    pub fn make_move(&mut self, origin: u32, dest: u32) -> Result<Move, MoveError> {
-        let mv = match self.validate_move(origin, dest, None) {
+    pub fn make_move(
+        &mut self,
+        origin: u32,
+        dest: u32,
+        promotion: Option<Kind>,
+    ) -> Result<Move, MoveError> {
+        let mv = match self.validate_move(origin, dest, promotion) {
             Ok(mv) => mv,
             Err(err) => return Err(err),
         };
 
         // Applying capture before applying the move
         // to ensure we dont remove the moved piece.
-        if mv.kind() == MoveKind::Capture {
-            self.apply_capture(&dest);
+        if mv.kind().is_capture() {
+            self.apply_capture(&mv);
         }
 
         let idx = self.get_layer_index(&mv.piece());
@@ -346,6 +372,10 @@ impl Board {
             self.move_rock_on_castle(&mv);
         }
 
+        if mv.kind().is_promotion() {
+            self.apply_pawn_promotion(mv);
+        }
+
         self.check_played_lost_castling(&mv);
         self.next_turn();
         self.history.push(mv.clone());
@@ -353,11 +383,23 @@ impl Board {
         Ok(mv)
     }
 
-    fn apply_capture(&mut self, pos: &u32) {
-        self.layers
-            .iter_mut()
-            .filter(|layer| **layer & (1 << pos) != 0)
-            .for_each(|layer| layer.bitxor_assign(1 << pos));
+    fn apply_capture(&mut self, mv: &Move) {
+        if mv.kind() == MoveKind::EnPassantCapture {
+            match mv.piece().color {
+                Color::Black => self.remove_piece(&(mv.offset_to() + 8)),
+                Color::White => self.remove_piece(&(mv.offset_to() - 8)),
+            }
+        } else {
+            self.remove_piece(&mv.offset_to());
+        }
+    }
+
+    fn remove_piece(&mut self, pos: &u8) {
+        for idx in self.rival_layers_range() {
+            if self.layers[idx] & (1 << pos) != 0 {
+                self.layers[idx].bitxor_assign(1 << pos)
+            }
+        }
     }
 
     fn validate_move(
@@ -373,7 +415,7 @@ impl Board {
         let (borigin, bdest) = (1 << origin, 1 << dest);
 
         let idx = match self
-            .turn_layers_range()
+            .player_layers_range()
             .find(|idx| self.layers[*idx] & borigin != 0)
         {
             None => return move_error("no piece found at origin for current player"),
@@ -407,6 +449,37 @@ impl Board {
             Err(e) => return Err(e),
             Ok(prom_kind) => kind = prom_kind,
         };
+
+        if piece.kind == Kind::Pawn {
+            match origin.abs_diff(dest) {
+                8 => {}
+                7 | 9 => {
+                    if let Some(last_mv) = self.history.last() {
+                        if is_capture_en_passant(bdest, last_mv) {
+                            kind = MoveKind::EnPassantCapture;
+                        }
+                    }
+                }
+                16 => {
+                    if self.player_pawn_start_file_bitmap() & borigin == 0 {
+                        return move_error("pawns can only move double from start square");
+                    }
+
+                    kind = MoveKind::PawnDouble;
+                }
+                _ => {
+                    return move_error(
+                        "pawns can only move one or two squares forward or capture in diagonal.",
+                    )
+                }
+            }
+
+            if (piece.color == Color::Black && dest > origin)
+                || (piece.color == Color::White && dest < origin)
+            {
+                return move_error("pawns can only go forward");
+            }
+        }
 
         // todo: validate king does not move to an attacked square
         // todo: validate that any move does not reveal a check to king
@@ -507,6 +580,33 @@ impl Board {
             _ => {}
         }
     }
+
+    fn apply_pawn_promotion(&mut self, mv: Move) {
+        let new_piece = match mv.kind() {
+            MoveKind::BishopPromotion | MoveKind::CapturingBishopPromotion => {
+                Piece::new(Kind::Bishop, mv.piece().color)
+            }
+            MoveKind::KnightPromotion | MoveKind::CapturingKnightPromotion => {
+                Piece::new(Kind::Knight, mv.piece().color)
+            }
+            MoveKind::RockPromotion | MoveKind::CapturingRockPromotion => {
+                Piece::new(Kind::Rock, mv.piece().color)
+            }
+            MoveKind::QueenPromotion | MoveKind::CapturingQueenPromotion => {
+                Piece::new(Kind::Queen, mv.piece().color)
+            }
+            _ => return,
+        };
+
+        self.layers[self.get_layer_index(&mv.piece())].bitxor_assign(mv.bitmap_to());
+        self.layers[self.get_layer_index(&new_piece)].bitor_assign(mv.bitmap_to())
+    }
+}
+
+fn is_capture_en_passant(dest: u64, last_mv: &Move) -> bool {
+    return last_mv.kind() == MoveKind::PawnDouble
+        && ((last_mv.bitmap_to() == (dest << 8) && last_mv.piece().color == Color::White)
+            || (last_mv.bitmap_to() == (dest >> 8) && last_mv.piece().color == Color::Black));
 }
 
 fn move_error<T>(msg: &str) -> Result<T, MoveError> {
@@ -627,14 +727,16 @@ const L_BORDER: u64 = 72340172838076673;
 
 #[cfg(test)]
 mod test {
-    use crate::engine::board::{moves_outside_board, Turn};
-    use crate::engine::movement::{Direction, Kind as MoveKind, Move};
+    use crate::engine::board::{is_capture_en_passant, moves_outside_board, Turn};
+    use crate::engine::movement::{Direction, Move};
     use crate::engine::piece::{Kind, Piece};
     use crate::engine::player::Player;
     use crate::engine::Board;
     use crate::engine::Color::{Black, White};
-    use crate::engine::Kind::{King, Rock};
-    use crate::engine::MoveKind::{Capture, CastleLong, CastleShort, Quiet};
+    use crate::engine::Kind::{King, Pawn, Queen, Rock};
+    use crate::engine::MoveKind::{
+        Capture, CastleLong, CastleShort, EnPassantCapture, PawnDouble, QueenPromotion, Quiet,
+    };
 
     #[test]
     fn it_moves_inside_board() {
@@ -686,7 +788,7 @@ mod test {
     #[test]
     fn it_should_generate_initial_moves() {
         let board = Board::initial();
-        let pawn = Piece::new(Kind::Pawn, White);
+        let pawn = Piece::new(Pawn, White);
         let knight = Piece::new(Kind::Knight, White);
 
         assert_eq!(
@@ -819,7 +921,11 @@ mod test {
 
         assert_eq!(
             Ok(w_castle),
-            board.make_move(w_castle.offset_from() as u32, w_castle.offset_to() as u32)
+            board.make_move(
+                w_castle.offset_from() as u32,
+                w_castle.offset_to() as u32,
+                None
+            )
         );
 
         assert_eq!(false, board.white.can_castle_short());
@@ -844,7 +950,11 @@ mod test {
 
         assert_eq!(
             Ok(b_castle),
-            board.make_move(b_castle.offset_from() as u32, b_castle.offset_to() as u32)
+            board.make_move(
+                b_castle.offset_from() as u32,
+                b_castle.offset_to() as u32,
+                None
+            )
         );
 
         assert_eq!(false, board.black.can_castle_short());
@@ -874,7 +984,11 @@ mod test {
 
         assert_eq!(
             Ok(w_castle),
-            board.make_move(w_castle.offset_from() as u32, w_castle.offset_to() as u32)
+            board.make_move(
+                w_castle.offset_from() as u32,
+                w_castle.offset_to() as u32,
+                None
+            )
         );
 
         assert_eq!(false, board.white.can_castle_long());
@@ -899,7 +1013,11 @@ mod test {
 
         assert_eq!(
             Ok(b_castle),
-            board.make_move(b_castle.offset_from() as u32, b_castle.offset_to() as u32)
+            board.make_move(
+                b_castle.offset_from() as u32,
+                b_castle.offset_to() as u32,
+                None
+            )
         );
 
         assert_eq!(false, board.black.can_castle_long());
@@ -916,31 +1034,138 @@ mod test {
     fn it_tracks_when_player_loses_castling() {
         let mut board = castling_board();
 
-        board.make_move(7, 6).expect("move 1 should be valid");
+        board.make_move(7, 6, None).expect("move 1 should be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(true, board.white.can_castle_long());
 
-        board.make_move(63, 61).expect("move 2 should be valid");
+        board
+            .make_move(63, 61, None)
+            .expect("move 2 should be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(true, board.black.can_castle_long());
 
-        board.make_move(0, 2).expect("move 3 should be valid");
+        board.make_move(0, 2, None).expect("move 3 should be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
 
-        board.make_move(56, 58).expect("move 4 should be valid");
+        board
+            .make_move(56, 58, None)
+            .expect("move 4 should be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
 
         board = castling_board();
 
-        board.make_move(4, 5).expect("king's move must be valid");
+        board
+            .make_move(4, 5, None)
+            .expect("king's move must be valid");
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
 
-        board.make_move(60, 61).expect("king's move must be valid");
+        board
+            .make_move(60, 61, None)
+            .expect("king's move must be valid");
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
+    }
+
+    #[test]
+    fn it_can_capture_en_passant() {
+        let w_pawn = Piece::new(Pawn, White);
+        let b_pawn = Piece::new(Pawn, Black);
+        for tc in [
+            (19, Move::new(w_pawn, 11, 27, PawnDouble, false, false)),
+            (23, Move::new(w_pawn, 15, 31, PawnDouble, false, false)),
+            (43, Move::new(b_pawn, 51, 35, PawnDouble, false, false)),
+            (40, Move::new(b_pawn, 48, 32, PawnDouble, false, false)),
+        ] {
+            assert_eq!(true, is_capture_en_passant(1 << tc.0, &tc.1))
+        }
+    }
+
+    #[test]
+    fn it_can_not_capture_en_passant() {
+        let w_pawn = Piece::new(Pawn, White);
+        let b_pawn = Piece::new(Pawn, Black);
+        for tc in [
+            (19, Move::new(w_pawn, 19, 27, Quiet, false, false)),
+            (31, Move::new(w_pawn, 23, 31, PawnDouble, false, false)),
+            (43, Move::new(b_pawn, 43, 35, Quiet, false, false)),
+            (31, Move::new(b_pawn, 40, 32, PawnDouble, false, false)),
+        ] {
+            assert_eq!(false, is_capture_en_passant(1 << tc.0, &tc.1))
+        }
+    }
+
+    #[test]
+    fn it_handles_en_passant_pawn_capture() {
+        let mut board = Board::initial();
+        let w_pawn = Piece::new(Pawn, White);
+        let b_pawn = Piece::new(Pawn, Black);
+
+        assert_eq!(
+            Ok(Move::new(w_pawn, 11, 27, PawnDouble, false, false)),
+            board.make_move(11, 27, None)
+        );
+
+        assert_eq!(
+            Ok(Move::new(b_pawn, 55, 47, Quiet, false, false)),
+            board.make_move(55, 47, None)
+        );
+
+        assert_eq!(
+            Ok(Move::new(w_pawn, 27, 35, Quiet, false, false)),
+            board.make_move(27, 35, None)
+        );
+
+        assert_eq!(
+            Ok(Move::new(b_pawn, 50, 34, PawnDouble, false, false)),
+            board.make_move(50, 34, None)
+        );
+
+        let mv = Move::new(w_pawn, 35, 42, EnPassantCapture, false, false);
+        match board
+            .generate_moves()
+            .iter()
+            .find(|mv| mv.kind() == EnPassantCapture)
+        {
+            None => panic!("did not generate en passant capture move."),
+            Some(gmv) => assert_eq!(mv, *gmv),
+        }
+
+        assert_eq!(Ok(mv), board.make_move(35, 42, None));
+        assert_eq!(
+            0,
+            board.layers[6] & (1 << 34),
+            "pawn has been removed after en passant capture"
+        )
+    }
+
+    #[test]
+    fn it_should_promote_pawn() {
+        let mut board = Board {
+            white: Player::new(),
+            black: Player::new(),
+            turn: Turn {
+                color: White,
+                number: 1,
+            },
+            layers: [1 << 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            history: vec![],
+        };
+
+        let mv = Move::new(
+            Piece::new(Pawn, White),
+            52,
+            60,
+            QueenPromotion,
+            false,
+            false,
+        );
+
+        assert_eq!(Ok(mv), board.make_move(52, 60, Some(Queen)));
+        assert_eq!(0, board.layers[0]);
+        assert_eq!(1 << 60, board.layers[4]);
     }
 }
 

@@ -1,6 +1,5 @@
 use std::error::Error;
 use std::fmt;
-use std::fmt::Formatter;
 
 use crate::engine::piece::Piece;
 use crate::engine::{draw_table, Color, Kind as PieceKind};
@@ -20,7 +19,7 @@ use crate::engine::{draw_table, Color, Kind as PieceKind};
 /// Also we can extract more features, for example:
 ///  - 16th bit indicates any kind of capture
 ///  - 20th bit indicates color (0 = white, 1 = black)
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Clone, PartialEq, Copy)]
 pub struct Move {
     mv: u32,
 }
@@ -100,6 +99,30 @@ impl Move {
 
         draw_table(out);
     }
+
+    fn display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Move {{ raw: {}, piece: {}, from: {}, to: {}, kind: {} }}",
+            self.mv,
+            self.piece().to_char(),
+            self.offset_from(),
+            self.offset_to(),
+            self.kind() as u8
+        )
+    }
+}
+
+impl fmt::Display for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.display(f)
+    }
+}
+
+impl fmt::Debug for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.display(f)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +146,18 @@ pub enum Kind {
 }
 
 impl Kind {
+    pub(crate) fn is_capture(&self) -> bool {
+        match self {
+            Kind::Capture
+            | Kind::CapturingKnightPromotion
+            | Kind::CapturingBishopPromotion
+            | Kind::CapturingRockPromotion
+            | Kind::CapturingQueenPromotion
+            | Kind::EnPassantCapture => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn is_promotion(&self) -> bool {
         match self {
             Kind::KnightPromotion
@@ -316,7 +351,7 @@ impl MoveError {
 }
 
 impl fmt::Display for MoveError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unable to move: {}", self.reason)
     }
 }
