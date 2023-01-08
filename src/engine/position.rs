@@ -8,7 +8,7 @@ use crate::engine::board::{Layers, INITIAL_LAYERS};
 use crate::engine::movement::Kind as MoveKind;
 use crate::engine::{draw_table, Color, Kind, Move, Piece};
 
-#[derive(PartialEq, Eq, PartialOrd, Copy, Clone, Debug)]
+#[derive(Eq, PartialOrd, Copy, Clone, Debug)]
 pub struct Square {
     offset: u8,
 }
@@ -48,7 +48,7 @@ impl Square {
     }
 
     pub fn rank_char(&self) -> char {
-        (self.rank() + '1' as u8) as char
+        (self.rank() + b'1') as char
     }
 
     pub fn file(&self) -> u8 {
@@ -56,7 +56,7 @@ impl Square {
     }
 
     pub fn file_char(&self) -> char {
-        (self.file() + 'a' as u8) as char
+        (self.file() + b'a') as char
     }
 
     pub fn same_rank(&self, other: &Square) -> bool {
@@ -143,7 +143,7 @@ impl Position {
         Piece::for_color(color)
             .iter()
             .find(|piece| self.layers[piece.layer_index()] & sq.bitmap() != 0)
-            .map(|p| p.clone())
+            .cloned()
     }
 
     pub fn piece_squares(&self, piece: &Piece) -> Vec<Square> {
@@ -280,7 +280,7 @@ fn is_valid_position(layers: Layers) -> bool {
     let mut uniq = HashSet::new();
     layers
         .iter()
-        .flat_map(|layer| extract_layer_offsets(layer))
+        .flat_map(extract_layer_offsets)
         .all(move |x| uniq.insert(x))
 }
 
@@ -319,22 +319,28 @@ impl TryFrom<String> for Square {
             return Err(format!("invalid square string {}", value));
         }
 
-        let (file, rank) = (value.chars().nth(0).unwrap(), value.chars().nth(1).unwrap());
-        if file < 'a' || file > 'h' {
+        let (file, rank) = (value.chars().next().unwrap(), value.chars().nth(1).unwrap());
+        if !('a'..='h').contains(&file) {
             return Err(format!("invalid file {}", file));
         }
 
-        if rank < '1' || rank > '8' {
-            return Err(format!("invalid rank"));
+        if !('1'..='8').contains(&rank) {
+            return Err("invalid rank".to_string());
         }
 
-        Square::new(((rank as u8 - '1' as u8) * 8) + (file as u8 - 'a' as u8))
+        Square::new(((rank as u8 - b'1') * 8) + (file as u8 - b'a'))
     }
 }
 
 impl Hash for Square {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u8(self.offset)
+    }
+}
+
+impl PartialEq for Square {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset.eq(&other.offset)
     }
 }
 

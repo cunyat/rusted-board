@@ -286,7 +286,7 @@ impl Board {
         self.position.apply_move(&mv);
         self.check_played_lost_castling(&mv);
         self.next_turn();
-        self.history.push(mv.clone());
+        self.history.push(mv);
 
         Ok(mv)
     }
@@ -423,7 +423,7 @@ impl Board {
         }
 
         match prom {
-            None => return move_error("missing promotion for pawn"),
+            None => move_error("missing promotion for pawn"),
             Some(Kind::Knight) if *mv_kind == MoveKind::Capture => {
                 Ok(MoveKind::CapturingKnightPromotion)
             }
@@ -440,15 +440,15 @@ impl Board {
             Some(Kind::Bishop) => Ok(MoveKind::BishopPromotion),
             Some(Kind::Rook) => Ok(MoveKind::RookPromotion),
             Some(Kind::Queen) => Ok(MoveKind::QueenPromotion),
-            Some(_) => return move_error("move kind must be a promotion type"),
+            Some(_) => move_error("move kind must be a promotion type"),
         }
     }
 }
 
 fn is_capture_en_passant(dest: u64, last_mv: &Move) -> bool {
-    return last_mv.kind() == MoveKind::PawnDouble
+    last_mv.kind() == MoveKind::PawnDouble
         && ((last_mv.dest().bitmap() == (dest << 8) && last_mv.piece().color == Color::White)
-            || (last_mv.dest().bitmap() == (dest >> 8) && last_mv.piece().color == Color::Black));
+            || (last_mv.dest().bitmap() == (dest >> 8) && last_mv.piece().color == Color::Black))
 }
 
 fn move_error<T>(msg: &str) -> Result<T, MoveError> {
@@ -475,7 +475,7 @@ fn apply_move(dir: &Direction, pos: &u64) -> Option<u64> {
     if offset > 0 {
         pos.checked_shl(offset as u32)
     } else {
-        pos.checked_shr(offset.abs() as u32)
+        pos.checked_shr(offset.unsigned_abs())
     }
 }
 
@@ -488,15 +488,15 @@ fn moves_outside_board(dir: &Direction, position: &u64) -> bool {
         || (position & L_BORDER != 0 && dir.is_west())
     {
         true
-    } else if dir.is_knight()
-        && ((position & (T_BORDER >> 8) != 0 && matches!(dir, Direction::NNE | Direction::NNW))
-            || (position & (R_BORDER >> 1) != 0 && matches!(dir, Direction::NEE | Direction::SEE))
-            || (position & (B_BORDER << 8) != 0 && matches!(dir, Direction::SSE | Direction::SSW))
-            || (position & (L_BORDER << 1) != 0 && matches!(dir, Direction::NWW | Direction::SWW)))
-    {
-        true
     } else {
-        false
+        dir.is_knight()
+            && ((position & (T_BORDER >> 8) != 0 && matches!(dir, Direction::Nne | Direction::Nnw))
+                || (position & (R_BORDER >> 1) != 0
+                    && matches!(dir, Direction::Nee | Direction::See))
+                || (position & (B_BORDER << 8) != 0
+                    && matches!(dir, Direction::Sse | Direction::Ssw))
+                || (position & (L_BORDER << 1) != 0
+                    && matches!(dir, Direction::Nww | Direction::Sww)))
     }
 }
 
@@ -505,21 +505,21 @@ fn moves_outside_board(dir: &Direction, position: &u64) -> bool {
 fn move_direction_offset(dir: &Direction) -> i32 {
     match dir {
         Direction::N => 8,
-        Direction::NE => 9,
+        Direction::Ne => 9,
         Direction::E => 1,
-        Direction::SE => -7,
+        Direction::Se => -7,
         Direction::S => -8,
-        Direction::SW => -9,
+        Direction::Sw => -9,
         Direction::W => -1,
-        Direction::NW => 7,
-        Direction::NNE => 17,
-        Direction::NEE => 10,
-        Direction::SEE => -6,
-        Direction::SSE => -15,
-        Direction::SSW => -17,
-        Direction::SWW => -10,
-        Direction::NWW => 6,
-        Direction::NNW => 15,
+        Direction::Nw => 7,
+        Direction::Nne => 17,
+        Direction::Nee => 10,
+        Direction::See => -6,
+        Direction::Sse => -15,
+        Direction::Ssw => -17,
+        Direction::Sww => -10,
+        Direction::Nww => 6,
+        Direction::Nnw => 15,
         Direction::CastleShort => 2,
         Direction::CastleLong => -2,
     }
@@ -528,10 +528,9 @@ fn move_direction_offset(dir: &Direction) -> i32 {
 #[allow(dead_code)]
 pub fn draw_layer(p: u64) {
     let mut out = [' '; 64];
-    for i in 0..64 {
-        out[i] = if (p >> i) & 1 == 1 { '1' } else { ' ' };
-    }
-
+    out.iter_mut()
+        .enumerate()
+        .for_each(|(idx, out_sq)| *out_sq = if (p >> idx) & 1 == 1 { '1' } else { ' ' });
     draw_table(out);
 }
 
@@ -596,37 +595,37 @@ mod test {
         for (dir, pos) in [
             (Direction::N, 1 << 4),
             (Direction::N, 1 << 52),
-            (Direction::NNE, 1 << 35),
-            (Direction::NNE, 1 << 22),
-            (Direction::NNE, 1 << 40),
-            (Direction::NE, 1 << 48),
-            (Direction::NE, 1 << 54),
-            (Direction::NE, 1 << 9),
-            (Direction::NEE, 1 << 53),
-            (Direction::NEE, 1 << 13),
+            (Direction::Nne, 1 << 35),
+            (Direction::Nne, 1 << 22),
+            (Direction::Nne, 1 << 40),
+            (Direction::Ne, 1 << 48),
+            (Direction::Ne, 1 << 54),
+            (Direction::Ne, 1 << 9),
+            (Direction::Nee, 1 << 53),
+            (Direction::Nee, 1 << 13),
             (Direction::E, 1 << 30),
             (Direction::E, 1 << 25),
-            (Direction::SEE, 1 << 13),
-            (Direction::SE, 1 << 14),
-            (Direction::SE, 1 << 44),
-            (Direction::SSE, 1 << 22),
-            (Direction::SSE, 1 << 34),
+            (Direction::See, 1 << 13),
+            (Direction::Se, 1 << 14),
+            (Direction::Se, 1 << 44),
+            (Direction::Sse, 1 << 22),
+            (Direction::Sse, 1 << 34),
             (Direction::S, 1 << 11),
             (Direction::S, 1 << 36),
-            (Direction::SSW, 1 << 17),
-            (Direction::SSW, 1 << 29),
-            (Direction::SW, 1 << 13),
-            (Direction::SW, 1 << 9),
-            (Direction::SWW, 1 << 10),
-            (Direction::SWW, 1 << 52),
+            (Direction::Ssw, 1 << 17),
+            (Direction::Ssw, 1 << 29),
+            (Direction::Sw, 1 << 13),
+            (Direction::Sw, 1 << 9),
+            (Direction::Sww, 1 << 10),
+            (Direction::Sww, 1 << 52),
             (Direction::W, 1 << 33),
             (Direction::W, 1 << 33),
-            (Direction::NWW, 1 << 50),
-            (Direction::NWW, 1 << 07),
-            (Direction::NW, 1 << 49),
-            (Direction::NW, 1 << 39),
-            (Direction::NNW, 1 << 41),
-            (Direction::NNW, 1 << 4),
+            (Direction::Nww, 1 << 50),
+            (Direction::Nww, 1 << 07),
+            (Direction::Nw, 1 << 49),
+            (Direction::Nw, 1 << 39),
+            (Direction::Nnw, 1 << 41),
+            (Direction::Nnw, 1 << 4),
         ] {
             assert_eq!(
                 false,
@@ -773,8 +772,8 @@ mod test {
             board.make_move(w_castle.origin().offset(), w_castle.dest().offset(), None)
         );
 
-        assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(false, board.white.can_castle_long());
+        assert!(!board.white.can_castle_short());
+        assert!(!board.white.can_castle_long());
         assert_piece_position(&board, &w_castle.piece(), w_castle.dest());
         assert_piece_position(&board, &Piece::new(Rook, White), sq!(5));
 
@@ -794,8 +793,8 @@ mod test {
             board.make_move(b_castle.origin().offset(), b_castle.dest().offset(), None)
         );
 
-        assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(false, board.black.can_castle_long());
+        assert!(!board.black.can_castle_short());
+        assert!(!board.black.can_castle_long());
         assert_piece_position(&board, &b_castle.piece(), b_castle.dest());
         assert_piece_position(&board, &Piece::new(Rook, Black), sq!(61));
     }
@@ -820,8 +819,8 @@ mod test {
             board.make_move(w_castle.origin().offset(), w_castle.dest().offset(), None)
         );
 
-        assert_eq!(false, board.white.can_castle_long());
-        assert_eq!(false, board.white.can_castle_short());
+        assert!(!board.white.can_castle_long());
+        assert!(!board.white.can_castle_short());
         assert_piece_position(&board, &w_castle.piece(), w_castle.dest());
         assert_piece_position(&board, &Piece::new(Rook, White), sq!(3));
 
@@ -841,8 +840,8 @@ mod test {
             board.make_move(b_castle.origin().offset(), b_castle.dest().offset(), None)
         );
 
-        assert_eq!(false, board.black.can_castle_long());
-        assert_eq!(false, board.black.can_castle_short());
+        assert!(!board.black.can_castle_long());
+        assert!(!board.black.can_castle_short());
         assert_piece_position(&board, &b_castle.piece(), b_castle.dest());
         assert_piece_position(&board, &Piece::new(Rook, Black), sq!(59));
     }
@@ -852,38 +851,38 @@ mod test {
         let mut board = castling_board();
 
         board.make_move(7, 6, None).expect("move 1 should be valid");
-        assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(true, board.white.can_castle_long());
+        assert!(!board.white.can_castle_short());
+        assert!(board.white.can_castle_long());
 
         board
             .make_move(63, 61, None)
             .expect("move 2 should be valid");
-        assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(true, board.black.can_castle_long());
+        assert!(!board.black.can_castle_short());
+        assert!(board.black.can_castle_long());
 
         board.make_move(0, 2, None).expect("move 3 should be valid");
-        assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(false, board.white.can_castle_long());
+        assert!(!board.white.can_castle_short());
+        assert!(!board.white.can_castle_long());
 
         board
             .make_move(56, 58, None)
             .expect("move 4 should be valid");
-        assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(false, board.black.can_castle_long());
+        assert!(!board.black.can_castle_short());
+        assert!(!board.black.can_castle_long());
 
         board = castling_board();
 
         board
             .make_move(4, 5, None)
             .expect("king's move must be valid");
-        assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(false, board.white.can_castle_long());
+        assert!(!board.white.can_castle_short());
+        assert!(!board.white.can_castle_long());
 
         board
             .make_move(60, 61, None)
             .expect("king's move must be valid");
-        assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(false, board.black.can_castle_long());
+        assert!(!board.black.can_castle_short());
+        assert!(!board.black.can_castle_long());
     }
 
     #[test]
@@ -894,7 +893,7 @@ mod test {
             (43, mv!(Pawn, Black, 51, 35, PawnDouble)),
             (40, mv!(Pawn, Black, 48, 32, PawnDouble)),
         ] {
-            assert_eq!(true, is_capture_en_passant(1 << tc.0, &tc.1))
+            assert!(is_capture_en_passant(1 << tc.0, &tc.1))
         }
     }
 
@@ -906,7 +905,7 @@ mod test {
             (43, mv!(Pawn, Black, 43, 35)),
             (31, mv!(Pawn, Black, 40, 32, PawnDouble)),
         ] {
-            assert_eq!(false, is_capture_en_passant(1 << tc.0, &tc.1))
+            assert!(!is_capture_en_passant(1 << tc.0, &tc.1))
         }
     }
 

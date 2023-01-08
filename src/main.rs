@@ -1,6 +1,7 @@
 extern crate core;
 
 use crate::engine::Board;
+use crate::engine::Square;
 
 mod engine;
 
@@ -27,7 +28,7 @@ fn main() {
     for mv in moves {
         match board.make_move(mv.0, mv.1, mv.2) {
             Ok(_) => {}
-            Err(err) => panic!("[ERROR]: {} at move {:?}", err, mv),
+            Err(err) => panic!("[ERROR]: {} at move {}-{}", err, sq!(mv.0), sq!(mv.1)),
         }
     }
 
@@ -49,52 +50,3 @@ fn main() {
 //     2    08 09 10 11 12 13 14 15
 //     1    00 01 02 03 04 05 06 07
 //           A  B  C  D  E  F  G  H
-
-#[allow(dead_code)]
-fn generate_bishop_moveset() {
-    let mut rank_attacks = [0u64; 64];
-
-    for sq in 0..64 {
-        let mut northeast = 9;
-        loop {
-            if sq + northeast >= 64 || (sq + northeast) % 8 == 0 {
-                break;
-            }
-            rank_attacks[sq] |= 1 << (sq + northeast);
-            northeast += 9;
-        }
-
-        let mut southeast = 7;
-        loop {
-            if southeast > sq || (sq - southeast) % 8 == 0 {
-                break;
-            }
-            rank_attacks[sq] |= 1 << (sq - southeast);
-            southeast += 7
-        }
-
-        let mut southwest = 9;
-        loop {
-            if southwest > sq || (sq - southwest) % 8 == 7 {
-                break;
-            }
-            rank_attacks[sq] |= 1 << (sq - southwest);
-            southwest += 9;
-        }
-        //
-        let mut northwest = 7;
-        loop {
-            if sq + northwest >= 64 || (sq + northwest) % 8 == 7 {
-                break;
-            }
-            rank_attacks[sq] |= 1 << (sq + northwest);
-            northwest += 7;
-        }
-    }
-
-    println!("const DIAGONAL_ATTACKS: [u64; 64] = [");
-    for sq in 0..64 {
-        println!("    {:#x},", rank_attacks[sq]);
-    }
-    println!("];")
-}

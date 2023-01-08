@@ -147,29 +147,29 @@ pub enum Kind {
 
 impl Kind {
     pub(crate) fn is_capture(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Kind::Capture
-            | Kind::CapturingKnightPromotion
-            | Kind::CapturingBishopPromotion
-            | Kind::CapturingRookPromotion
-            | Kind::CapturingQueenPromotion
-            | Kind::EnPassantCapture => true,
-            _ => false,
-        }
+                | Kind::CapturingKnightPromotion
+                | Kind::CapturingBishopPromotion
+                | Kind::CapturingRookPromotion
+                | Kind::CapturingQueenPromotion
+                | Kind::EnPassantCapture
+        )
     }
 
     pub(crate) fn is_promotion(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Kind::KnightPromotion
-            | Kind::BishopPromotion
-            | Kind::RookPromotion
-            | Kind::QueenPromotion
-            | Kind::CapturingKnightPromotion
-            | Kind::CapturingBishopPromotion
-            | Kind::CapturingRookPromotion
-            | Kind::CapturingQueenPromotion => true,
-            _ => false,
-        }
+                | Kind::BishopPromotion
+                | Kind::RookPromotion
+                | Kind::QueenPromotion
+                | Kind::CapturingKnightPromotion
+                | Kind::CapturingBishopPromotion
+                | Kind::CapturingRookPromotion
+                | Kind::CapturingQueenPromotion
+        )
     }
 
     pub(crate) fn promotion_piece_kind(&self) -> Option<PieceKind> {
@@ -221,23 +221,23 @@ fn decode_piece(mv: u32) -> Piece {
 #[derive(PartialEq, Debug)]
 pub enum Direction {
     N,
-    NE,
+    Ne,
     E,
-    SE,
+    Se,
     S,
-    SW,
+    Sw,
     W,
-    NW,
+    Nw,
 
     // Knight moves
-    NNE,
-    NEE,
-    SEE,
-    SSE,
-    SSW,
-    SWW,
-    NWW,
-    NNW,
+    Nne,
+    Nee,
+    See,
+    Sse,
+    Ssw,
+    Sww,
+    Nww,
+    Nnw,
 
     // King castle moves
     CastleShort,
@@ -246,76 +246,76 @@ pub enum Direction {
 
 impl Direction {
     pub fn is_north(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Direction::N
-            | Direction::NE
-            | Direction::NW
-            | Direction::NNE
-            | Direction::NEE
-            | Direction::NWW
-            | Direction::NNW => true,
-            _ => false,
-        }
+                | Direction::Ne
+                | Direction::Nw
+                | Direction::Nne
+                | Direction::Nee
+                | Direction::Nww
+                | Direction::Nnw
+        )
     }
 
     pub fn is_south(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Direction::S
-            | Direction::SE
-            | Direction::SW
-            | Direction::SEE
-            | Direction::SSE
-            | Direction::SSW
-            | Direction::SWW => true,
-            _ => false,
-        }
+                | Direction::Se
+                | Direction::Sw
+                | Direction::See
+                | Direction::Sse
+                | Direction::Ssw
+                | Direction::Sww
+        )
     }
 
     pub fn is_east(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Direction::E
-            | Direction::NE
-            | Direction::SE
-            | Direction::NNE
-            | Direction::NEE
-            | Direction::SSE
-            | Direction::SEE => true,
-            _ => false,
-        }
+                | Direction::Ne
+                | Direction::Se
+                | Direction::Nne
+                | Direction::Nee
+                | Direction::Sse
+                | Direction::See
+        )
     }
 
     pub fn is_west(&self) -> bool {
-        match self {
+        matches!(
+            self,
             Direction::W
-            | Direction::NW
-            | Direction::SW
-            | Direction::NNW
-            | Direction::NWW
-            | Direction::SSW
-            | Direction::SWW => true,
-            _ => false,
-        }
+                | Direction::Nw
+                | Direction::Sw
+                | Direction::Nnw
+                | Direction::Nww
+                | Direction::Ssw
+                | Direction::Sww
+        )
     }
 
     pub fn is_knight(&self) -> bool {
-        match self {
-            Direction::NNE
-            | Direction::NEE
-            | Direction::SEE
-            | Direction::SSE
-            | Direction::SSW
-            | Direction::SWW
-            | Direction::NWW
-            | Direction::NNW => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Direction::Nne
+                | Direction::Nee
+                | Direction::See
+                | Direction::Sse
+                | Direction::Ssw
+                | Direction::Sww
+                | Direction::Nww
+                | Direction::Nnw
+        )
     }
 
     pub fn is_diagonal(&self) -> bool {
-        match self {
-            Direction::NE | Direction::SE | Direction::SW | Direction::NW => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            Direction::Ne | Direction::Se | Direction::Sw | Direction::Nw
+        )
     }
 }
 
