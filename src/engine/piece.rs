@@ -1,5 +1,6 @@
-use crate::engine::movement::SpecialMoves::*;
-use crate::engine::movement::{Direction, PotentialMove};
+use crate::engine::movegen::PotentialMove;
+use crate::engine::movegen::SpecialMoves::{CastleLong, CastleShort, PawnAdvance, PawnCapture};
+use crate::engine::movement::Direction;
 use crate::engine::player::Color;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -7,7 +8,7 @@ pub enum Kind {
     Pawn,
     Bishop,
     Knight,
-    Rock,
+    Rook,
     Queen,
     King,
 }
@@ -53,7 +54,7 @@ impl Piece {
                 PotentialMove::new(self.clone(), Direction::NWW, false, None),
                 PotentialMove::new(self.clone(), Direction::NNW, false, None),
             ],
-            Kind::Rock => vec![
+            Kind::Rook => vec![
                 PotentialMove::new(self.clone(), Direction::N, true, None),
                 PotentialMove::new(self.clone(), Direction::E, true, None),
                 PotentialMove::new(self.clone(), Direction::S, true, None),
@@ -94,14 +95,14 @@ impl Piece {
             (Kind::Pawn, Color::Black) => 'p',
             (Kind::Bishop, Color::Black) => 'b',
             (Kind::Knight, Color::Black) => 'n',
-            (Kind::Rock, Color::Black) => 'r',
+            (Kind::Rook, Color::Black) => 'r',
             (Kind::Queen, Color::Black) => 'q',
             (Kind::King, Color::Black) => 'k',
 
             (Kind::Pawn, Color::White) => 'P',
             (Kind::Bishop, Color::White) => 'B',
             (Kind::Knight, Color::White) => 'N',
-            (Kind::Rock, Color::White) => 'R',
+            (Kind::Rook, Color::White) => 'R',
             (Kind::Queen, Color::White) => 'Q',
             (Kind::King, Color::White) => 'K',
         }

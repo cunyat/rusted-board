@@ -73,12 +73,12 @@ impl Move {
             3 => Kind::CastleLong,
             4 => Kind::KnightPromotion,
             5 => Kind::BishopPromotion,
-            6 => Kind::RockPromotion,
+            6 => Kind::RookPromotion,
             7 => Kind::QueenPromotion,
             9 => Kind::Capture,
             10 => Kind::CapturingKnightPromotion,
             11 => Kind::CapturingBishopPromotion,
-            12 => Kind::CapturingRockPromotion,
+            12 => Kind::CapturingRookPromotion,
             13 => Kind::CapturingQueenPromotion,
             14 => Kind::EnPassantCapture,
             unknown => panic!("unknown value decoding move flag: {}", unknown),
@@ -133,13 +133,13 @@ pub enum Kind {
     CastleLong = 3,
     KnightPromotion = 4,
     BishopPromotion = 5,
-    RockPromotion = 6,
+    RookPromotion = 6,
     QueenPromotion = 7,
     // free = 8,
     Capture = 9,
     CapturingKnightPromotion = 10,
     CapturingBishopPromotion = 11,
-    CapturingRockPromotion = 12,
+    CapturingRookPromotion = 12,
     CapturingQueenPromotion = 13,
     EnPassantCapture = 14,
     // free = 15
@@ -151,7 +151,7 @@ impl Kind {
             Kind::Capture
             | Kind::CapturingKnightPromotion
             | Kind::CapturingBishopPromotion
-            | Kind::CapturingRockPromotion
+            | Kind::CapturingRookPromotion
             | Kind::CapturingQueenPromotion
             | Kind::EnPassantCapture => true,
             _ => false,
@@ -162,13 +162,23 @@ impl Kind {
         match self {
             Kind::KnightPromotion
             | Kind::BishopPromotion
-            | Kind::RockPromotion
+            | Kind::RookPromotion
             | Kind::QueenPromotion
             | Kind::CapturingKnightPromotion
             | Kind::CapturingBishopPromotion
-            | Kind::CapturingRockPromotion
+            | Kind::CapturingRookPromotion
             | Kind::CapturingQueenPromotion => true,
             _ => false,
+        }
+    }
+
+    pub(crate) fn promotion_piece_kind(&self) -> Option<PieceKind> {
+        match self {
+            Kind::BishopPromotion | Kind::CapturingBishopPromotion => Some(PieceKind::Bishop),
+            Kind::KnightPromotion | Kind::CapturingKnightPromotion => Some(PieceKind::Knight),
+            Kind::RookPromotion | Kind::CapturingRookPromotion => Some(PieceKind::Rook),
+            Kind::QueenPromotion | Kind::CapturingQueenPromotion => Some(PieceKind::Queen),
+            _ => None,
         }
     }
 }
@@ -178,13 +188,13 @@ fn encode_piece(piece: Piece) -> u32 {
         (Color::White, PieceKind::Pawn) => 0,
         (Color::White, PieceKind::Bishop) => 1,
         (Color::White, PieceKind::Knight) => 2,
-        (Color::White, PieceKind::Rock) => 3,
+        (Color::White, PieceKind::Rook) => 3,
         (Color::White, PieceKind::Queen) => 4,
         (Color::White, PieceKind::King) => 5,
         (Color::Black, PieceKind::Pawn) => 8,
         (Color::Black, PieceKind::Bishop) => 9,
         (Color::Black, PieceKind::Knight) => 10,
-        (Color::Black, PieceKind::Rock) => 11,
+        (Color::Black, PieceKind::Rook) => 11,
         (Color::Black, PieceKind::Queen) => 12,
         (Color::Black, PieceKind::King) => 13,
     }
@@ -195,13 +205,13 @@ fn decode_piece(mv: u32) -> Piece {
         0 => Piece::new(PieceKind::Pawn, Color::White),
         1 => Piece::new(PieceKind::Bishop, Color::White),
         2 => Piece::new(PieceKind::Knight, Color::White),
-        3 => Piece::new(PieceKind::Rock, Color::White),
+        3 => Piece::new(PieceKind::Rook, Color::White),
         4 => Piece::new(PieceKind::Queen, Color::White),
         5 => Piece::new(PieceKind::King, Color::White),
         8 => Piece::new(PieceKind::Pawn, Color::Black),
         9 => Piece::new(PieceKind::Bishop, Color::Black),
         10 => Piece::new(PieceKind::Knight, Color::Black),
-        11 => Piece::new(PieceKind::Rock, Color::Black),
+        11 => Piece::new(PieceKind::Rook, Color::Black),
         12 => Piece::new(PieceKind::Queen, Color::Black),
         13 => Piece::new(PieceKind::King, Color::Black),
         unknown => panic!("unexpected piece value from move encoding {}", unknown),
@@ -232,36 +242,6 @@ pub enum Direction {
     // King castle moves
     CastleShort,
     CastleLong,
-}
-
-pub enum SpecialMoves {
-    PawnAdvance,
-    PawnCapture,
-    CastleLong,
-    CastleShort,
-}
-
-pub struct PotentialMove {
-    pub(crate) piece: Piece,
-    pub(crate) dir: Direction,
-    pub(crate) slicing: bool,
-    pub(crate) special: Option<SpecialMoves>,
-}
-
-impl PotentialMove {
-    pub fn new(
-        piece: Piece,
-        dir: Direction,
-        slicing: bool,
-        special: Option<SpecialMoves>,
-    ) -> PotentialMove {
-        PotentialMove {
-            piece,
-            dir,
-            slicing,
-            special,
-        }
-    }
 }
 
 impl Direction {

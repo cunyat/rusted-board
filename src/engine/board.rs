@@ -1,13 +1,12 @@
 use std::ops::{BitOrAssign, BitXorAssign, Range};
 
 use crate::engine::draw_table;
-use crate::engine::movement::{
-    Direction, Kind as MoveKind, Move, MoveError, PotentialMove, SpecialMoves,
-};
+use crate::engine::movegen::{PotentialMove, SpecialMoves};
+use crate::engine::movement::{Direction, Kind as MoveKind, Move, MoveError};
 use crate::engine::piece::{Kind, Piece};
 use crate::engine::player::{Color, Player};
 
-type Layers = [u64; 12];
+pub(crate) type Layers = [u64; 12];
 
 pub struct Turn {
     color: Color,
@@ -91,7 +90,7 @@ impl Board {
         };
 
         match mv.piece().kind {
-            Kind::Rock => {
+            Kind::Rook => {
                 if player.can_castle_short() && mv.offset_from() % 8 == 7 {
                     player.castling_short_lost();
                 }
@@ -124,13 +123,6 @@ impl Board {
         }
     }
 
-    fn rival_king(&self) -> &u64 {
-        &self.layers[match self.turn.color {
-            Color::White => 5,
-            Color::Black => 11,
-        }]
-    }
-
     fn white_pieces(&self) -> u64 {
         self.layers[0]
             | self.layers[1]
@@ -161,13 +153,13 @@ impl Board {
             (Color::White, Kind::Pawn) => 0,
             (Color::White, Kind::Bishop) => 1,
             (Color::White, Kind::Knight) => 2,
-            (Color::White, Kind::Rock) => 3,
+            (Color::White, Kind::Rook) => 3,
             (Color::White, Kind::Queen) => 4,
             (Color::White, Kind::King) => 5,
             (Color::Black, Kind::Pawn) => 6,
             (Color::Black, Kind::Bishop) => 7,
             (Color::Black, Kind::Knight) => 8,
-            (Color::Black, Kind::Rock) => 9,
+            (Color::Black, Kind::Rook) => 9,
             (Color::Black, Kind::Queen) => 10,
             (Color::Black, Kind::King) => 11,
         }
@@ -178,13 +170,13 @@ impl Board {
             0 => Piece::new(Kind::Pawn, Color::White),
             1 => Piece::new(Kind::Bishop, Color::White),
             2 => Piece::new(Kind::Knight, Color::White),
-            3 => Piece::new(Kind::Rock, Color::White),
+            3 => Piece::new(Kind::Rook, Color::White),
             4 => Piece::new(Kind::Queen, Color::White),
             5 => Piece::new(Kind::King, Color::White),
             6 => Piece::new(Kind::Pawn, Color::Black),
             7 => Piece::new(Kind::Bishop, Color::Black),
             8 => Piece::new(Kind::Knight, Color::Black),
-            9 => Piece::new(Kind::Rock, Color::Black),
+            9 => Piece::new(Kind::Rook, Color::Black),
             10 => Piece::new(Kind::Queen, Color::Black),
             11 => Piece::new(Kind::King, Color::Black),
             _ => panic!(
@@ -440,12 +432,12 @@ impl Board {
             kind = MoveKind::Capture;
         }
 
-        match self.validate_king_castling(&piece, &origin, &dest, &mut kind) {
+        match self.validate_king_castling(&piece, &origin, &dest, &kind) {
             Err(e) => return Err(e),
             Ok(mv_kind) => kind = mv_kind,
         };
 
-        match self.validate_promotion(&piece, &bdest, promotion, &mut kind) {
+        match self.validate_promotion(&piece, &bdest, promotion, &kind) {
             Err(e) => return Err(e),
             Ok(prom_kind) => kind = prom_kind,
         };
@@ -529,7 +521,7 @@ impl Board {
         piece: &Piece,
         bdest: &u64,
         prom: Option<Kind>,
-        mv_kind: &mut MoveKind,
+        mv_kind: &MoveKind,
     ) -> Result<MoveKind, MoveError> {
         if prom.is_some() && piece.kind != Kind::Pawn {
             return move_error("only pawns can promote");
@@ -551,22 +543,22 @@ impl Board {
             Some(Kind::Bishop) if *mv_kind == MoveKind::Capture => {
                 Ok(MoveKind::CapturingBishopPromotion)
             }
-            Some(Kind::Rock) if *mv_kind == MoveKind::Capture => {
-                Ok(MoveKind::CapturingRockPromotion)
+            Some(Kind::Rook) if *mv_kind == MoveKind::Capture => {
+                Ok(MoveKind::CapturingRookPromotion)
             }
             Some(Kind::Queen) if *mv_kind == MoveKind::Capture => {
                 Ok(MoveKind::CapturingQueenPromotion)
             }
             Some(Kind::Knight) => Ok(MoveKind::KnightPromotion),
             Some(Kind::Bishop) => Ok(MoveKind::BishopPromotion),
-            Some(Kind::Rock) => Ok(MoveKind::RockPromotion),
+            Some(Kind::Rook) => Ok(MoveKind::RookPromotion),
             Some(Kind::Queen) => Ok(MoveKind::QueenPromotion),
             Some(_) => return move_error("move kind must be a promotion type"),
         }
     }
 
     fn move_rock_on_castle(&mut self, mv: &Move) {
-        let idx = self.get_layer_index(&Piece::new(Kind::Rock, self.turn.color));
+        let idx = self.get_layer_index(&Piece::new(Kind::Rook, self.turn.color));
 
         match mv.kind() {
             MoveKind::CastleShort => {
@@ -589,8 +581,8 @@ impl Board {
             MoveKind::KnightPromotion | MoveKind::CapturingKnightPromotion => {
                 Piece::new(Kind::Knight, mv.piece().color)
             }
-            MoveKind::RockPromotion | MoveKind::CapturingRockPromotion => {
-                Piece::new(Kind::Rock, mv.piece().color)
+            MoveKind::RookPromotion | MoveKind::CapturingRookPromotion => {
+                Piece::new(Kind::Rook, mv.piece().color)
             }
             MoveKind::QueenPromotion | MoveKind::CapturingQueenPromotion => {
                 Piece::new(Kind::Queen, mv.piece().color)
@@ -704,7 +696,7 @@ pub fn draw_layer(p: u64) {
     draw_table(out);
 }
 
-const INITIAL_LAYERS: Layers = [
+pub(crate) const INITIAL_LAYERS: Layers = [
     // 0,
     0b11111111 << 8,
     0b00100100,
@@ -733,7 +725,7 @@ mod test {
     use crate::engine::player::Player;
     use crate::engine::Board;
     use crate::engine::Color::{Black, White};
-    use crate::engine::Kind::{King, Pawn, Queen, Rock};
+    use crate::engine::Kind::{King, Pawn, Queen, Rook};
     use crate::engine::MoveKind::{
         Capture, CastleLong, CastleShort, EnPassantCapture, PawnDouble, QueenPromotion, Quiet,
     };
@@ -933,7 +925,7 @@ mod test {
         assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b00100001,
-            board.get_layer(&Piece::new(Rock, White)),
+            board.get_layer(&Piece::new(Rook, White)),
             "rock is also moved when castled"
         );
 
@@ -962,7 +954,7 @@ mod test {
         assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b00100001 << 56,
-            board.get_layer(&Piece::new(Rock, Black)),
+            board.get_layer(&Piece::new(Rook, Black)),
             "rock is also moved when castled"
         );
     }
@@ -996,7 +988,7 @@ mod test {
         assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b10001000,
-            board.get_layer(&Piece::new(Rock, White)),
+            board.get_layer(&Piece::new(Rook, White)),
             "rock is also moved when castled"
         );
 
@@ -1025,7 +1017,7 @@ mod test {
         assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b10001000 << 56,
-            board.get_layer(&Piece::new(Rock, Black)),
+            board.get_layer(&Piece::new(Rook, Black)),
             "rock is also moved when castled"
         );
     }

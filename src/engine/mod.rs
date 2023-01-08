@@ -1,12 +1,15 @@
-pub use self::board::Board;
+pub use self::board::{draw_layer, Board};
 pub use self::movement::{Kind as MoveKind, Move};
 pub use self::piece::{Kind, Piece};
 pub use self::player::Color;
 
 mod board;
+mod calculated;
+mod movegen;
 mod movement;
 mod piece;
 mod player;
+mod position;
 
 pub(crate) fn draw_table(p: [char; 64]) {
     println!("┌───┬───┬───┬───┬───┬───┬───┬───┐");

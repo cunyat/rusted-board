@@ -1,6 +1,6 @@
 extern crate core;
 
-use crate::engine::Board;
+use crate::engine::{draw_layer, Board, Color, Kind, Piece};
 
 mod engine;
 
@@ -37,6 +37,58 @@ fn main() {
     for mv in board.generate_moves() {
         mv.draw();
     }
+}
+
+#[allow(dead_code)]
+fn generate_bishop_moveset() {
+    let mut rank_attacks = [0u64; 64];
+
+    for sq in 0..64 {
+        let mut northeast = 9;
+        loop {
+            if sq + northeast >= 64 || (sq + northeast) % 8 == 0 {
+                break;
+            }
+            rank_attacks[sq] |= 1 << (sq + northeast);
+            northeast += 9;
+        }
+
+        let mut southeast = 7;
+        loop {
+            if southeast > sq || (sq - southeast) % 8 == 0 {
+                break;
+            }
+            rank_attacks[sq] |= 1 << (sq - southeast);
+            southeast += 7
+        }
+
+        let mut southwest = 9;
+        loop {
+            if southwest > sq || (sq - southwest) % 8 == 7 {
+                break;
+            }
+            rank_attacks[sq] |= 1 << (sq - southwest);
+            southwest += 9;
+        }
+        //
+        let mut northwest = 7;
+        loop {
+            if sq + northwest >= 64 || (sq + northwest) % 8 == 7 {
+                break;
+            }
+            rank_attacks[sq] |= 1 << (sq + northwest);
+            northwest += 7;
+        }
+    }
+
+    println!("const DIAGONAL_ATTACKS: [u64; 64] = [");
+    for sq in 0..64 {
+        println!("    {:#x},", rank_attacks[sq]);
+
+        println!("index: {}", sq);
+        draw_layer(rank_attacks[sq]);
+    }
+    println!("];")
 }
 
 // Bitmap cheatsheet :D
