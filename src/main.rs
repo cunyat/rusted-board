@@ -1,5 +1,3 @@
-extern crate core;
-
 use crate::engine::{draw_layer, Board, Color, Kind, Piece};
 
 mod engine;

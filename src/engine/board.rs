@@ -1,10 +1,9 @@
-use std::ops::{BitOrAssign, BitXorAssign, Range};
-
 use crate::engine::draw_table;
 use crate::engine::movegen::{PotentialMove, SpecialMoves};
 use crate::engine::movement::{Direction, Kind as MoveKind, Move, MoveError};
 use crate::engine::piece::{Kind, Piece};
 use crate::engine::player::{Color, Player};
+use crate::engine::position::{extract_layer_offsets, Position};
 
 pub(crate) type Layers = [u64; 12];
 
@@ -19,7 +18,7 @@ pub struct Board {
     black: Player,
     turn: Turn,
 
-    layers: Layers,
+    position: Position,
 
     history: Vec<Move>,
 }
@@ -34,32 +33,13 @@ impl Board {
                 color: Color::White,
                 number: 1,
             },
-            layers: INITIAL_LAYERS,
+            position: Position::initial(),
             history: vec![],
         }
     }
 
     pub fn draw(&self) {
-        let mut out: [char; 64] = [' '; 64];
-
-        self.layers
-            .into_iter()
-            .enumerate()
-            .for_each(|(idx, layer)| {
-                let piece = self.get_piece_by_layer_index(idx);
-                let mut offset = layer.trailing_zeros();
-
-                while offset < 64 {
-                    out[offset as usize] = piece.to_char();
-
-                    offset = match layer_next_offset(&layer, offset) {
-                        Some(value) => value,
-                        None => break,
-                    };
-                }
-            });
-
-        draw_table(out);
+        self.position.draw();
     }
 
     fn player(&self) -> &Player {
@@ -109,119 +89,48 @@ impl Board {
         }
     }
 
-    fn player_pieces(&self) -> u64 {
+    fn player_pieces(&self) -> &u64 {
         match self.turn.color {
             Color::White => self.white_pieces(),
             Color::Black => self.black_pieces(),
         }
     }
 
-    fn rival_pieces(&self) -> u64 {
+    fn rival_pieces(&self) -> &u64 {
         match self.turn.color {
             Color::White => self.black_pieces(),
             Color::Black => self.white_pieces(),
         }
     }
 
-    fn white_pieces(&self) -> u64 {
-        self.layers[0]
-            | self.layers[1]
-            | self.layers[2]
-            | self.layers[3]
-            | self.layers[4]
-            | self.layers[5]
+    fn white_pieces(&self) -> &u64 {
+        self.position.white_pieces()
     }
 
-    fn black_pieces(&self) -> u64 {
-        self.layers[6]
-            | self.layers[7]
-            | self.layers[8]
-            | self.layers[9]
-            | self.layers[10]
-            | self.layers[11]
+    fn black_pieces(&self) -> &u64 {
+        self.position.black_pieces()
     }
 
-    /// Returns a tuple containing the index and the layer copy
-    /// for the given piece
-    fn get_layer(&self, piece: &Piece) -> u64 {
-        self.layers[self.get_layer_index(piece)]
-    }
-
-    /// Returns layer index containing given piece
-    fn get_layer_index(&self, piece: &Piece) -> usize {
-        match (piece.color, piece.kind) {
-            (Color::White, Kind::Pawn) => 0,
-            (Color::White, Kind::Bishop) => 1,
-            (Color::White, Kind::Knight) => 2,
-            (Color::White, Kind::Rook) => 3,
-            (Color::White, Kind::Queen) => 4,
-            (Color::White, Kind::King) => 5,
-            (Color::Black, Kind::Pawn) => 6,
-            (Color::Black, Kind::Bishop) => 7,
-            (Color::Black, Kind::Knight) => 8,
-            (Color::Black, Kind::Rook) => 9,
-            (Color::Black, Kind::Queen) => 10,
-            (Color::Black, Kind::King) => 11,
-        }
-    }
-
-    fn get_piece_by_layer_index(&self, idx: usize) -> Piece {
-        match idx {
-            0 => Piece::new(Kind::Pawn, Color::White),
-            1 => Piece::new(Kind::Bishop, Color::White),
-            2 => Piece::new(Kind::Knight, Color::White),
-            3 => Piece::new(Kind::Rook, Color::White),
-            4 => Piece::new(Kind::Queen, Color::White),
-            5 => Piece::new(Kind::King, Color::White),
-            6 => Piece::new(Kind::Pawn, Color::Black),
-            7 => Piece::new(Kind::Bishop, Color::Black),
-            8 => Piece::new(Kind::Knight, Color::Black),
-            9 => Piece::new(Kind::Rook, Color::Black),
-            10 => Piece::new(Kind::Queen, Color::Black),
-            11 => Piece::new(Kind::King, Color::Black),
-            _ => panic!(
-                "layers index must be [0, 12), trying to obtain piece for index {}",
-                idx
-            ),
-        }
-    }
-
-    fn player_layers_range(&self) -> Range<usize> {
-        match self.turn.color {
-            Color::White => 0..6,
-            Color::Black => 6..12,
-        }
-    }
-
-    fn rival_layers_range(&self) -> Range<usize> {
-        match self.turn.color {
-            Color::Black => 0..6,
-            Color::White => 6..12,
-        }
+    #[cfg(test)]
+    fn get_layer(&self, piece: &Piece) -> &u64 {
+        self.position.get_layer(piece)
     }
 
     pub fn generate_moves(&self) -> Vec<Move> {
         let mut moves: Vec<Move> = vec![];
 
-        for idx in self.player_layers_range() {
-            let layer = self.layers[idx];
-            let mut offset = layer.trailing_zeros();
+        for piece in Piece::all() {
+            if piece.color != self.turn.color {
+                continue;
+            }
 
-            while offset < 64 {
-                moves.append(
-                    self.get_piece_by_layer_index(idx)
-                        .potential_moves()
-                        .iter()
-                        .filter_map(|pm| self.generate_legal_moves(pm, 1 << offset))
-                        .flatten()
-                        .collect::<Vec<Move>>()
-                        .as_mut(),
-                );
-
-                offset = match layer_next_offset(&layer, offset) {
-                    Some(value) => value,
-                    None => break,
-                };
+            for pos in extract_layer_offsets(self.position.get_layer(&piece)) {
+                for pmove in piece.potential_moves() {
+                    match self.generate_legal_moves(&pmove, 1 << pos) {
+                        None => {}
+                        Some(mut mv) => moves.append(mv.as_mut()),
+                    }
+                }
             }
         }
 
@@ -351,47 +260,12 @@ impl Board {
             Err(err) => return Err(err),
         };
 
-        // Applying capture before applying the move
-        // to ensure we dont remove the moved piece.
-        if mv.kind().is_capture() {
-            self.apply_capture(&mv);
-        }
-
-        let idx = self.get_layer_index(&mv.piece());
-        self.layers[idx] = self.layers[idx] ^ (1 << origin) ^ (1 << dest);
-
-        if matches!(mv.kind(), MoveKind::CastleLong | MoveKind::CastleShort) {
-            self.move_rock_on_castle(&mv);
-        }
-
-        if mv.kind().is_promotion() {
-            self.apply_pawn_promotion(mv);
-        }
-
+        self.position.apply_move(&mv);
         self.check_played_lost_castling(&mv);
         self.next_turn();
         self.history.push(mv.clone());
 
         Ok(mv)
-    }
-
-    fn apply_capture(&mut self, mv: &Move) {
-        if mv.kind() == MoveKind::EnPassantCapture {
-            match mv.piece().color {
-                Color::Black => self.remove_piece(&(mv.offset_to() + 8)),
-                Color::White => self.remove_piece(&(mv.offset_to() - 8)),
-            }
-        } else {
-            self.remove_piece(&mv.offset_to());
-        }
-    }
-
-    fn remove_piece(&mut self, pos: &u8) {
-        for idx in self.rival_layers_range() {
-            if self.layers[idx] & (1 << pos) != 0 {
-                self.layers[idx].bitxor_assign(1 << pos)
-            }
-        }
     }
 
     fn validate_move(
@@ -406,19 +280,15 @@ impl Board {
 
         let (borigin, bdest) = (1 << origin, 1 << dest);
 
-        let idx = match self
-            .player_layers_range()
-            .find(|idx| self.layers[*idx] & borigin != 0)
-        {
+        let piece = match self.position.find_piece(origin as u8, self.turn.color) {
             None => return move_error("no piece found at origin for current player"),
-            Some(idx) => idx,
+            Some(p) => p,
         };
 
         if self.player_pieces() & bdest != 0 {
             return move_error("destination already occupied by player piece");
         }
 
-        let piece = self.get_piece_by_layer_index(idx);
         let mut kind = MoveKind::Quiet;
         let mut check = false;
         let mut checkmate = false;
@@ -509,10 +379,7 @@ impl Board {
                 }
             }
 
-            pos => {
-                println!("{} => {}", pos.0, pos.1);
-                move_error("invalid move positions for castling")
-            }
+            _ => move_error("invalid move positions for castling"),
         }
     }
 
@@ -556,43 +423,6 @@ impl Board {
             Some(_) => return move_error("move kind must be a promotion type"),
         }
     }
-
-    fn move_rock_on_castle(&mut self, mv: &Move) {
-        let idx = self.get_layer_index(&Piece::new(Kind::Rook, self.turn.color));
-
-        match mv.kind() {
-            MoveKind::CastleShort => {
-                self.layers[idx] =
-                    self.layers[idx] ^ (mv.bitmap_from() << 1) ^ (mv.bitmap_from() << 3)
-            }
-            MoveKind::CastleLong => {
-                self.layers[idx] =
-                    self.layers[idx] ^ (mv.bitmap_from() >> 1) ^ (mv.bitmap_from() >> 4)
-            }
-            _ => {}
-        }
-    }
-
-    fn apply_pawn_promotion(&mut self, mv: Move) {
-        let new_piece = match mv.kind() {
-            MoveKind::BishopPromotion | MoveKind::CapturingBishopPromotion => {
-                Piece::new(Kind::Bishop, mv.piece().color)
-            }
-            MoveKind::KnightPromotion | MoveKind::CapturingKnightPromotion => {
-                Piece::new(Kind::Knight, mv.piece().color)
-            }
-            MoveKind::RookPromotion | MoveKind::CapturingRookPromotion => {
-                Piece::new(Kind::Rook, mv.piece().color)
-            }
-            MoveKind::QueenPromotion | MoveKind::CapturingQueenPromotion => {
-                Piece::new(Kind::Queen, mv.piece().color)
-            }
-            _ => return,
-        };
-
-        self.layers[self.get_layer_index(&mv.piece())].bitxor_assign(mv.bitmap_to());
-        self.layers[self.get_layer_index(&new_piece)].bitor_assign(mv.bitmap_to())
-    }
 }
 
 fn is_capture_en_passant(dest: u64, last_mv: &Move) -> bool {
@@ -603,17 +433,6 @@ fn is_capture_en_passant(dest: u64, last_mv: &Move) -> bool {
 
 fn move_error<T>(msg: &str) -> Result<T, MoveError> {
     Err(MoveError::new(msg.to_string()))
-}
-
-fn layer_next_offset(layer: &u64, last: u32) -> Option<u32> {
-    if *layer == 0 || last >= 63 {
-        return None;
-    }
-
-    match layer & u64::MAX << last + 1 {
-        0 => None,
-        a => Some(a.trailing_zeros()),
-    }
 }
 
 fn pawn_initial_layer(color: Color) -> u64 {
@@ -723,6 +542,7 @@ mod test {
     use crate::engine::movement::{Direction, Move};
     use crate::engine::piece::{Kind, Piece};
     use crate::engine::player::Player;
+    use crate::engine::position::Position;
     use crate::engine::Board;
     use crate::engine::Color::{Black, White};
     use crate::engine::Kind::{King, Pawn, Queen, Rook};
@@ -818,7 +638,7 @@ mod test {
         let board = Board {
             white: Player::new(),
             black: Player::new(),
-            layers: [0, 0, 0, 0, 1 << 27, 0, 1 << 59, 0, 0, 0, 0, 0],
+            position: Position::must_new([0, 0, 0, 0, 1 << 27, 0, 1 << 59, 0, 0, 0, 0, 0]),
             turn: Turn {
                 color: White,
                 number: 1,
@@ -874,7 +694,7 @@ mod test {
         Board {
             white: Player::new(),
             black: Player::new(),
-            layers: [
+            position: Position::must_new([
                 0xff << 8,
                 0,
                 0,
@@ -887,7 +707,7 @@ mod test {
                 0x81 << 56,
                 0,
                 1 << 60,
-            ],
+            ]),
             turn: Turn {
                 color: White,
                 number: 1,
@@ -922,10 +742,10 @@ mod test {
 
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
-        assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
+        assert_eq!(w_castle.bitmap_to(), *board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b00100001,
-            board.get_layer(&Piece::new(Rook, White)),
+            *board.get_layer(&Piece::new(Rook, White)),
             "rock is also moved when castled"
         );
 
@@ -951,10 +771,10 @@ mod test {
 
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
-        assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
+        assert_eq!(b_castle.bitmap_to(), *board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b00100001 << 56,
-            board.get_layer(&Piece::new(Rook, Black)),
+            *board.get_layer(&Piece::new(Rook, Black)),
             "rock is also moved when castled"
         );
     }
@@ -985,10 +805,10 @@ mod test {
 
         assert_eq!(false, board.white.can_castle_long());
         assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(w_castle.bitmap_to(), board.get_layer(&w_castle.piece()));
+        assert_eq!(w_castle.bitmap_to(), *board.get_layer(&w_castle.piece()));
         assert_eq!(
             0b10001000,
-            board.get_layer(&Piece::new(Rook, White)),
+            *board.get_layer(&Piece::new(Rook, White)),
             "rock is also moved when castled"
         );
 
@@ -1014,10 +834,10 @@ mod test {
 
         assert_eq!(false, board.black.can_castle_long());
         assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(b_castle.bitmap_to(), board.get_layer(&b_castle.piece()));
+        assert_eq!(b_castle.bitmap_to(), *board.get_layer(&b_castle.piece()));
         assert_eq!(
             0b10001000 << 56,
-            board.get_layer(&Piece::new(Rook, Black)),
+            *board.get_layer(&Piece::new(Rook, Black)),
             "rock is also moved when castled"
         );
     }
@@ -1128,7 +948,7 @@ mod test {
         assert_eq!(Ok(mv), board.make_move(35, 42, None));
         assert_eq!(
             0,
-            board.layers[6] & (1 << 34),
+            board.position.get_layer(&w_pawn) & (1 << 34),
             "pawn has been removed after en passant capture"
         )
     }
@@ -1142,7 +962,7 @@ mod test {
                 color: White,
                 number: 1,
             },
-            layers: [1 << 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            position: Position::must_new([1 << 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
             history: vec![],
         };
 
@@ -1156,8 +976,11 @@ mod test {
         );
 
         assert_eq!(Ok(mv), board.make_move(52, 60, Some(Queen)));
-        assert_eq!(0, board.layers[0]);
-        assert_eq!(1 << 60, board.layers[4]);
+        assert_eq!(0, *board.position.get_layer(&mv.piece()));
+        assert_eq!(
+            1 << 60,
+            *board.position.get_layer(&Piece::new(Queen, White))
+        );
     }
 }
 

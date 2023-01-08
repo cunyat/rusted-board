@@ -3,9 +3,9 @@ use std::ops::Range;
 
 use crate::engine::board::{Layers, INITIAL_LAYERS};
 use crate::engine::movement::Kind as MoveKind;
-use crate::engine::{Color, Kind, Move, Piece};
+use crate::engine::{draw_table, Color, Kind, Move, Piece};
 
-struct Position {
+pub struct Position {
     layers: Layers,
 
     cache: [u64; 2],
@@ -23,6 +23,11 @@ const KNIGHT_LAYER: usize = 2;
 const ROOK_LAYER: usize = 3;
 const QUEEN_LAYER: usize = 4;
 const KING_LAYER: usize = 5;
+
+const BLACK_LAYER_OFFSET: usize = 6;
+
+const WHITE_LAYERS_RANGE: Range<usize> = 0..6;
+const BLACK_LAYERS_RANGE: Range<usize> = 6..12;
 
 pub type InvalidPosition = &'static str;
 
@@ -52,6 +57,41 @@ impl Position {
         Position::must_new(INITIAL_LAYERS)
     }
 
+    pub fn white_pieces(&self) -> &u64 {
+        &self.cache[CACHE_WHITE_PIECES]
+    }
+
+    pub fn black_pieces(&self) -> &u64 {
+        &self.cache[CACHE_BLACK_PIECES]
+    }
+
+    pub fn get_layer(&self, piece: &Piece) -> &u64 {
+        &self.layers[piece.layer_index()]
+    }
+
+    pub fn is_piece_at_position(&self, piece: &Piece, offset: &u8) -> bool {
+        (self.get_layer(piece) & (1 << offset)) != 0
+    }
+
+    pub fn find_piece(&self, offset: u8, color: Color) -> Option<Piece> {
+        Piece::for_color(color)
+            .iter()
+            .find(|piece| self.layers[piece.layer_index()] & (1 << offset) != 0)
+            .map(|p| p.clone())
+    }
+
+    pub fn draw(&self) {
+        let mut out: [char; 64] = [' '; 64];
+
+        Piece::all().into_iter().for_each(|piece| {
+            for pos in extract_layer_offsets(&self.layers[piece.layer_index()]) {
+                out[pos as usize] = piece.to_char();
+            }
+        });
+
+        draw_table(out);
+    }
+
     fn generate_cached_layers(&mut self) {
         self.cache[CACHE_WHITE_PIECES] = self.layers[0..6]
             .iter()
@@ -65,7 +105,7 @@ impl Position {
     /// Applies a movement in the position.
     /// It assumes that move is validated and legal,
     /// so it should only get called from the game engine.
-    pub(crate) fn apply_move(&mut self, mv: Move) {
+    pub(crate) fn apply_move(&mut self, mv: &Move) {
         let idx = mv.piece().layer_index();
 
         // move the piece
@@ -77,7 +117,7 @@ impl Position {
         self.generate_cached_layers();
     }
 
-    fn apply_promotion(&mut self, mv: Move) {
+    fn apply_promotion(&mut self, mv: &Move) {
         if !mv.kind().is_promotion() {
             return;
         }
@@ -91,7 +131,7 @@ impl Position {
         self.layers[new_piece.layer_index()] ^= mv.bitmap_to();
     }
 
-    fn apply_castling(&mut self, mv: Move) {
+    fn apply_castling(&mut self, mv: &Move) {
         if !matches!(mv.kind(), MoveKind::CastleLong | MoveKind::CastleShort) {
             return;
         }
@@ -109,7 +149,7 @@ impl Position {
         }
     }
 
-    fn apply_capture(&mut self, mv: Move) {
+    fn apply_capture(&mut self, mv: &Move) {
         if !mv.kind().is_capture() {
             return;
         }
@@ -174,12 +214,12 @@ fn is_valid_position(layers: Layers) -> bool {
         .all(move |x| uniq.insert(x))
 }
 
-fn extract_layer_offsets(layer: &u64) -> Vec<u8> {
+pub fn extract_layer_offsets(layer: &u64) -> Vec<u8> {
     let mut last: u32 = layer.trailing_zeros();
     let mut offsets = vec![];
     while last < 64 {
         offsets.push(last as u8);
-        last = (layer & (1 << (last + 1))).trailing_zeros();
+        last = (layer.overflowing_shr(last + 1).0).trailing_zeros() + last + 1;
     }
 
     offsets
@@ -229,7 +269,7 @@ impl Kind {
 
 #[cfg(test)]
 mod test {
-    use crate::engine::position::{move_ray, Position};
+    use crate::engine::position::{extract_layer_offsets, move_ray, Position};
     use crate::engine::Color::{Black, White};
     use crate::engine::Kind::{King, Pawn};
     use crate::engine::MoveKind::{CastleLong, CastleShort, QueenPromotion, RookPromotion};
@@ -251,6 +291,21 @@ mod test {
     ];
 
     #[test]
+    fn it_extracts_layer_offsets() {
+        assert_eq!(
+            vec![0, 1, 6, 63],
+            extract_layer_offsets(&(1 | (1 << 1) | (1 << 6) | 1 << 63))
+        );
+
+        assert_eq!(
+            (0..64).collect::<Vec<u8>>(),
+            extract_layer_offsets(&u64::MAX),
+        );
+
+        assert_eq!(Vec::<u8>::new(), extract_layer_offsets(&0));
+    }
+
+    #[test]
     fn it_generates_move_ray() {
         assert_eq!((1 << 28) | (1 << 36), move_ray(20, 44));
         assert_eq!(0x8080808080800, move_ray(3, 59));
@@ -269,12 +324,12 @@ mod test {
         let w_king = Piece::new(King, White);
         let b_king = Piece::new(King, Black);
 
-        pos.apply_move(Move::new(w_king, 4, 6, CastleShort, false, false));
+        pos.apply_move(&Move::new(w_king, 4, 6, CastleShort, false, false));
 
         assert_eq!(1 << 6, pos.layers[5]);
         assert_eq!(1 | 1 << 5, pos.layers[3]);
 
-        pos.apply_move(Move::new(b_king, 60, 62, CastleShort, false, false));
+        pos.apply_move(&Move::new(b_king, 60, 62, CastleShort, false, false));
 
         assert_eq!(1 << 62, pos.layers[11]);
         assert_eq!(1 << 56 | 1 << 61, pos.layers[9]);
@@ -286,12 +341,12 @@ mod test {
         let w_king = Piece::new(King, White);
         let b_king = Piece::new(King, Black);
 
-        pos.apply_move(Move::new(w_king, 4, 2, CastleLong, false, false));
+        pos.apply_move(&Move::new(w_king, 4, 2, CastleLong, false, false));
 
         assert_eq!(1 << 2, pos.layers[5]);
         assert_eq!(1 << 3 | 1 << 7, pos.layers[3]);
 
-        pos.apply_move(Move::new(b_king, 60, 58, CastleLong, false, false));
+        pos.apply_move(&Move::new(b_king, 60, 58, CastleLong, false, false));
 
         assert_eq!(1 << 58, pos.layers[11]);
         assert_eq!(1 << 59 | 1 << 63, pos.layers[9]);
@@ -302,12 +357,12 @@ mod test {
         let mut pos = Position::must_new([1 << 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 << 10, 0]);
 
         let pawn = Piece::new(Pawn, White);
-        pos.apply_move(Move::new(pawn, 52, 60, QueenPromotion, false, false));
+        pos.apply_move(&Move::new(pawn, 52, 60, QueenPromotion, false, false));
         assert_eq!(0, pos.layers[0]);
         assert_eq!(1 << 60, pos.layers[4]);
 
         let pawn = Piece::new(Pawn, Black);
-        pos.apply_move(Move::new(pawn, 10, 2, RookPromotion, false, false));
+        pos.apply_move(&Move::new(pawn, 10, 2, RookPromotion, false, false));
         assert_eq!(0, pos.layers[6]);
         assert_eq!(1 << 2, pos.layers[9])
     }

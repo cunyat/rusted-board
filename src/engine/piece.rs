@@ -24,6 +24,52 @@ impl Piece {
         Piece { kind, color }
     }
 
+    pub fn all() -> [Piece; 12] {
+        [
+            Piece::new(Kind::Pawn, Color::White),
+            Piece::new(Kind::Bishop, Color::White),
+            Piece::new(Kind::Knight, Color::White),
+            Piece::new(Kind::Rook, Color::White),
+            Piece::new(Kind::Queen, Color::White),
+            Piece::new(Kind::King, Color::White),
+            Piece::new(Kind::Pawn, Color::Black),
+            Piece::new(Kind::Bishop, Color::Black),
+            Piece::new(Kind::Knight, Color::Black),
+            Piece::new(Kind::Rook, Color::Black),
+            Piece::new(Kind::Queen, Color::Black),
+            Piece::new(Kind::King, Color::Black),
+        ]
+    }
+
+    pub fn white() -> [Piece; 6] {
+        [
+            Piece::new(Kind::Pawn, Color::White),
+            Piece::new(Kind::Bishop, Color::White),
+            Piece::new(Kind::Knight, Color::White),
+            Piece::new(Kind::Rook, Color::White),
+            Piece::new(Kind::Queen, Color::White),
+            Piece::new(Kind::King, Color::White),
+        ]
+    }
+
+    pub fn black() -> [Piece; 6] {
+        [
+            Piece::new(Kind::Pawn, Color::Black),
+            Piece::new(Kind::Bishop, Color::Black),
+            Piece::new(Kind::Knight, Color::Black),
+            Piece::new(Kind::Rook, Color::Black),
+            Piece::new(Kind::Queen, Color::Black),
+            Piece::new(Kind::King, Color::Black),
+        ]
+    }
+
+    pub fn for_color(color: Color) -> [Piece; 6] {
+        match color {
+            Color::Black => Piece::black(),
+            Color::White => Piece::white(),
+        }
+    }
+
     pub fn potential_moves(&self) -> Vec<PotentialMove> {
         match self.kind {
             Kind::Pawn => {
