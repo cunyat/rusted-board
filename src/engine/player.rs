@@ -1,7 +1,23 @@
+use std::fmt;
+use std::fmt::Formatter;
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Color {
     Black,
     White,
+}
+
+impl fmt::Display for Color {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Color::Black => "black",
+                Color::White => "white",
+            }
+        )
+    }
 }
 
 pub(crate) enum CastlingStatus {

@@ -2,16 +2,51 @@ pub use self::board::{draw_layer, Board};
 pub use self::movement::{Kind as MoveKind, Move};
 pub use self::piece::{Kind, Piece};
 pub use self::player::Color;
+pub use self::position::{Position, Square};
 
 mod board;
-mod calculated;
+// mod calculated; ignore file while not being used
 mod movegen;
 mod movement;
 mod piece;
 mod player;
 mod position;
 
-pub(crate) fn draw_table(p: [char; 64]) {
+#[macro_export]
+macro_rules! sq {
+    ($val:expr) => {
+        match Square::try_from($val) {
+            Err(e) => panic!("invalid square value: {}", e),
+            Ok(sq) => sq,
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! mv {
+    ($kind:ident, $color:ident, $from:expr, $to:expr) => {
+        Move::new(
+            Piece::new($kind, $color),
+            sq!($from),
+            sq!($to),
+            $crate::engine::movement::Kind::Quiet,
+            false,
+            false,
+        )
+    };
+    ($p_kind:ident, $color:ident, $from:expr, $to:expr, $m_kind:ident) => {
+        Move::new(
+            Piece::new($p_kind, $color),
+            sq!($from),
+            sq!($to),
+            $m_kind,
+            false,
+            false,
+        )
+    };
+}
+
+pub fn draw_table(p: [char; 64]) {
     println!("┌───┬───┬───┬───┬───┬───┬───┬───┐");
     println!(
         "│ {} │ {} │ {} │ {} │ {} │ {} │ {} │ {} │",

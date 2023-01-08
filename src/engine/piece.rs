@@ -2,6 +2,8 @@ use crate::engine::movegen::PotentialMove;
 use crate::engine::movegen::SpecialMoves::{CastleLong, CastleShort, PawnAdvance, PawnCapture};
 use crate::engine::movement::Direction;
 use crate::engine::player::Color;
+use core::fmt;
+use std::fmt::Formatter;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Kind {
@@ -152,5 +154,28 @@ impl Piece {
             (Kind::Queen, Color::White) => 'Q',
             (Kind::King, Color::White) => 'K',
         }
+    }
+}
+
+impl fmt::Display for Piece {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.color, self.kind)
+    }
+}
+
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Kind::Pawn => "pawn",
+                Kind::Bishop => "bishop",
+                Kind::Knight => "knight",
+                Kind::Rook => "rook",
+                Kind::Queen => "queen",
+                Kind::King => "king",
+            }
+        )
     }
 }

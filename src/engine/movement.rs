@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::engine::piece::Piece;
+use crate::engine::position::Square;
 use crate::engine::{draw_table, Color, Kind as PieceKind};
 
 /// Move represents a move.
@@ -34,10 +35,17 @@ impl Move {
         }
     }
 
-    pub fn new(piece: Piece, from: u32, to: u32, kind: Kind, check: bool, checkmate: bool) -> Move {
+    pub fn new(
+        piece: Piece,
+        from: Square,
+        to: Square,
+        kind: Kind,
+        check: bool,
+        checkmate: bool,
+    ) -> Move {
         Move {
-            mv: (from & 0x3f)
-                | ((to & 0x3f) << 6)
+            mv: ((from.offset() as u32) & 0x3f)
+                | (((to.offset() as u32) & 0x3f) << 6)
                 | (kind as u32 & 0xf) << 12
                 | (encode_piece(piece) & 0xf) << 16
                 | (check as u32 & 0x1) << 20
@@ -49,20 +57,12 @@ impl Move {
         decode_piece(self.mv)
     }
 
-    pub fn bitmap_from(&self) -> u64 {
-        1 << self.offset_from()
+    pub fn origin(&self) -> Square {
+        Square::must((self.mv & 0x3f) as u8)
     }
 
-    pub fn bitmap_to(&self) -> u64 {
-        1 << self.offset_to()
-    }
-
-    pub fn offset_from(&self) -> u8 {
-        (self.mv & 0x3f) as u8
-    }
-
-    pub fn offset_to(&self) -> u8 {
-        ((self.mv >> 6) & 0x3f) as u8
+    pub fn dest(&self) -> Square {
+        Square::must(((self.mv >> 6) & 0x3f) as u8)
     }
 
     pub fn kind(&self) -> Kind {
@@ -88,8 +88,8 @@ impl Move {
     pub fn draw(&self) {
         let mut out = [' '; 64];
 
-        out[self.offset_from() as usize] = self.piece().to_char();
-        out[self.offset_to() as usize] = match self.kind() {
+        out[self.origin().offset() as usize] = self.piece().to_char();
+        out[self.dest().offset() as usize] = match self.kind() {
             Kind::Quiet => 'O',
             Kind::Capture => 'X',
             Kind::CastleShort => 'C',
@@ -106,8 +106,8 @@ impl Move {
             "Move {{ raw: {}, piece: {}, from: {}, to: {}, kind: {} }}",
             self.mv,
             self.piece().to_char(),
-            self.offset_from(),
-            self.offset_to(),
+            self.origin(),
+            self.dest(),
             self.kind() as u8
         )
     }

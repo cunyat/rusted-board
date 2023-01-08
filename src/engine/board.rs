@@ -3,13 +3,13 @@ use crate::engine::movegen::{PotentialMove, SpecialMoves};
 use crate::engine::movement::{Direction, Kind as MoveKind, Move, MoveError};
 use crate::engine::piece::{Kind, Piece};
 use crate::engine::player::{Color, Player};
-use crate::engine::position::{extract_layer_offsets, Position};
+use crate::engine::position::{Position, Square};
 
 pub(crate) type Layers = [u64; 12];
 
 pub struct Turn {
     color: Color,
-    number: u8,
+    number: u16,
 }
 
 /// Board represents game current status and handles all changes
@@ -49,7 +49,7 @@ impl Board {
         }
     }
 
-    fn player_last_file_bitmap(&self) -> u64 {
+    fn player_last_rank_full(&self) -> u64 {
         match self.turn.color {
             Color::White => 0xff << 56,
             Color::Black => 0xff,
@@ -71,11 +71,11 @@ impl Board {
 
         match mv.piece().kind {
             Kind::Rook => {
-                if player.can_castle_short() && mv.offset_from() % 8 == 7 {
+                if player.can_castle_short() && mv.origin().file() == 7 {
                     player.castling_short_lost();
                 }
 
-                if player.can_castle_long() && mv.offset_from() % 8 == 0 {
+                if player.can_castle_long() && mv.origin().file() == 0 {
                     player.castling_long_lost();
                 }
             }
@@ -111,22 +111,35 @@ impl Board {
         self.position.black_pieces()
     }
 
-    #[cfg(test)]
-    fn get_layer(&self, piece: &Piece) -> &u64 {
-        self.position.get_layer(piece)
-    }
-
     pub fn generate_moves(&self) -> Vec<Move> {
         let mut moves: Vec<Move> = vec![];
+
+        // Piece::all()
+        //     .iter()
+        //     .filter(|p| p.color == self.turn.color)
+        //     .flat_map(|piece| {
+        //         self.position
+        //             .piece_positions(piece)
+        //             .map(|pos| (piece, pos))
+        //             .collect::<Vec<(&Piece, u8)>>()
+        //     })
+        //     .for_each(|(piece, pos)| {
+        //         for pmove in piece.potential_moves() {
+        //             match self.generate_legal_moves(&pmove, 1 << pos) {
+        //                 None => {}
+        //                 Some(mut mv) => moves.append(mv.as_mut()),
+        //             }
+        //         }
+        //     });
 
         for piece in Piece::all() {
             if piece.color != self.turn.color {
                 continue;
             }
 
-            for pos in extract_layer_offsets(self.position.get_layer(&piece)) {
+            for pos in self.position.piece_squares(&piece) {
                 for pmove in piece.potential_moves() {
-                    match self.generate_legal_moves(&pmove, 1 << pos) {
+                    match self.generate_legal_moves(&pmove, pos.bitmap()) {
                         None => {}
                         Some(mut mv) => moves.append(mv.as_mut()),
                     }
@@ -251,10 +264,20 @@ impl Board {
 
     pub fn make_move(
         &mut self,
-        origin: u32,
-        dest: u32,
+        origin_offset: u8,
+        dest_offset: u8,
         promotion: Option<Kind>,
     ) -> Result<Move, MoveError> {
+        let origin = match Square::new(origin_offset) {
+            Ok(sq) => sq,
+            Err(err) => return Err(MoveError::new(format!("invalid origin square: {}", err))),
+        };
+
+        let dest = match Square::new(dest_offset) {
+            Ok(sq) => sq,
+            Err(err) => return Err(MoveError::new(format!("invalid dest square: {}", err))),
+        };
+
         let mv = match self.validate_move(origin, dest, promotion) {
             Ok(mv) => mv,
             Err(err) => return Err(err),
@@ -270,31 +293,25 @@ impl Board {
 
     fn validate_move(
         &self,
-        origin: u32,
-        dest: u32,
+        origin: Square,
+        dest: Square,
         promotion: Option<Kind>,
     ) -> Result<Move, MoveError> {
-        if origin >= 64 || dest >= 64 {
-            return move_error("origin and destination must be in range [0, 64)");
-        }
-
-        let (borigin, bdest) = (1 << origin, 1 << dest);
-
-        let piece = match self.position.find_piece(origin as u8, self.turn.color) {
+        let piece = match self.position.find_piece(origin, self.turn.color) {
             None => return move_error("no piece found at origin for current player"),
             Some(p) => p,
         };
 
-        if self.player_pieces() & bdest != 0 {
+        if self.player_pieces() & dest.bitmap() != 0 {
             return move_error("destination already occupied by player piece");
         }
 
         let mut kind = MoveKind::Quiet;
-        let mut check = false;
-        let mut checkmate = false;
+        let check = false;
+        let checkmate = false;
 
-        if self.rival_pieces() & bdest != 0 {
-            if piece.kind == Kind::Pawn && (origin.abs_diff(dest) % 8) == 0 {
+        if self.rival_pieces() & dest.bitmap() != 0 {
+            if piece.kind == Kind::Pawn && (origin.abs_diff(&dest) % 8) == 0 {
                 return move_error("pawns cannot capture while advancing forward");
             }
             // todo: check if king is capturing a defended piece
@@ -307,23 +324,23 @@ impl Board {
             Ok(mv_kind) => kind = mv_kind,
         };
 
-        match self.validate_promotion(&piece, &bdest, promotion, &kind) {
+        match self.validate_promotion(&piece, &dest, promotion, &kind) {
             Err(e) => return Err(e),
             Ok(prom_kind) => kind = prom_kind,
         };
 
         if piece.kind == Kind::Pawn {
-            match origin.abs_diff(dest) {
+            match origin.abs_diff(&dest) {
                 8 => {}
                 7 | 9 => {
                     if let Some(last_mv) = self.history.last() {
-                        if is_capture_en_passant(bdest, last_mv) {
+                        if is_capture_en_passant(dest.bitmap(), last_mv) {
                             kind = MoveKind::EnPassantCapture;
                         }
                     }
                 }
                 16 => {
-                    if self.player_pawn_start_file_bitmap() & borigin == 0 {
+                    if self.player_pawn_start_file_bitmap() & origin.bitmap() == 0 {
                         return move_error("pawns can only move double from start square");
                     }
 
@@ -353,17 +370,17 @@ impl Board {
     fn validate_king_castling(
         &self,
         piece: &Piece,
-        origin: &u32,
-        dest: &u32,
+        origin: &Square,
+        dest: &Square,
         kind: &MoveKind,
     ) -> Result<MoveKind, MoveError> {
-        if piece.kind != Kind::King || origin.abs_diff(*dest) != 2 {
+        if piece.kind != Kind::King || origin.abs_diff(dest) != 2 {
             return Ok(kind.clone());
         }
 
         // todo: validate that squares origin..=dest are not attacked.
 
-        match (origin, dest) {
+        match (origin.offset(), dest.offset()) {
             (4, 2) | (60, 58) => {
                 if !self.player().can_castle_long() {
                     move_error("player has lost long castling")
@@ -386,7 +403,7 @@ impl Board {
     fn validate_promotion(
         &self,
         piece: &Piece,
-        bdest: &u64,
+        dest: &Square,
         prom: Option<Kind>,
         mv_kind: &MoveKind,
     ) -> Result<MoveKind, MoveError> {
@@ -394,11 +411,14 @@ impl Board {
             return move_error("only pawns can promote");
         }
 
-        if prom.is_some() && bdest & self.player_last_file_bitmap() == 0 {
+        if piece.kind == Kind::Pawn
+            && prom.is_some()
+            && dest.bitmap() & self.player_last_rank_full() == 0
+        {
             return move_error("promoting when not in last file");
         }
 
-        if piece.kind != Kind::Pawn || self.player_last_file_bitmap() & bdest == 0 {
+        if piece.kind != Kind::Pawn || self.player_last_rank_full() & dest.bitmap() == 0 {
             return Ok(mv_kind.clone());
         }
 
@@ -427,8 +447,8 @@ impl Board {
 
 fn is_capture_en_passant(dest: u64, last_mv: &Move) -> bool {
     return last_mv.kind() == MoveKind::PawnDouble
-        && ((last_mv.bitmap_to() == (dest << 8) && last_mv.piece().color == Color::White)
-            || (last_mv.bitmap_to() == (dest >> 8) && last_mv.piece().color == Color::Black));
+        && ((last_mv.dest().bitmap() == (dest << 8) && last_mv.piece().color == Color::White)
+            || (last_mv.dest().bitmap() == (dest >> 8) && last_mv.piece().color == Color::Black));
 }
 
 fn move_error<T>(msg: &str) -> Result<T, MoveError> {
@@ -540,15 +560,36 @@ const L_BORDER: u64 = 72340172838076673;
 mod test {
     use crate::engine::board::{is_capture_en_passant, moves_outside_board, Turn};
     use crate::engine::movement::{Direction, Move};
-    use crate::engine::piece::{Kind, Piece};
+    use crate::engine::piece::Piece;
     use crate::engine::player::Player;
-    use crate::engine::position::Position;
+    use crate::engine::position::{Position, Square};
     use crate::engine::Board;
     use crate::engine::Color::{Black, White};
-    use crate::engine::Kind::{King, Pawn, Queen, Rook};
+    use crate::engine::Kind::{King, Knight, Pawn, Queen, Rook};
     use crate::engine::MoveKind::{
-        Capture, CastleLong, CastleShort, EnPassantCapture, PawnDouble, QueenPromotion, Quiet,
+        Capture, CastleLong, CastleShort, EnPassantCapture, PawnDouble, QueenPromotion,
     };
+    use crate::{mv, sq};
+
+    fn assert_piece_position(board: &Board, piece: &Piece, sq: Square) {
+        assert!(
+            board.position.piece_squares(piece).contains(&sq),
+            "Failed asserting that {} is at {}{}",
+            piece,
+            sq.file_char(),
+            sq.rank_char(),
+        )
+    }
+
+    fn assert_piece_not_in_position(board: &Board, piece: &Piece, sq: Square) {
+        assert!(
+            !board.position.piece_squares(piece).contains(&sq),
+            "Failed asserting that {} is not at {}{}",
+            piece,
+            sq.file_char(),
+            sq.rank_char(),
+        )
+    }
 
     #[test]
     fn it_moves_inside_board() {
@@ -600,31 +641,29 @@ mod test {
     #[test]
     fn it_should_generate_initial_moves() {
         let board = Board::initial();
-        let pawn = Piece::new(Pawn, White);
-        let knight = Piece::new(Kind::Knight, White);
 
         assert_eq!(
             vec![
-                Move::new_old(pawn, 1 << 8, 1 << 16, Quiet),
-                Move::new_old(pawn, 1 << 8, 1 << 24, Quiet),
-                Move::new_old(pawn, 1 << 9, 1 << 17, Quiet),
-                Move::new_old(pawn, 1 << 9, 1 << 25, Quiet),
-                Move::new_old(pawn, 1 << 10, 1 << 18, Quiet),
-                Move::new_old(pawn, 1 << 10, 1 << 26, Quiet),
-                Move::new_old(pawn, 1 << 11, 1 << 19, Quiet),
-                Move::new_old(pawn, 1 << 11, 1 << 27, Quiet),
-                Move::new_old(pawn, 1 << 12, 1 << 20, Quiet),
-                Move::new_old(pawn, 1 << 12, 1 << 28, Quiet),
-                Move::new_old(pawn, 1 << 13, 1 << 21, Quiet),
-                Move::new_old(pawn, 1 << 13, 1 << 29, Quiet),
-                Move::new_old(pawn, 1 << 14, 1 << 22, Quiet),
-                Move::new_old(pawn, 1 << 14, 1 << 30, Quiet),
-                Move::new_old(pawn, 1 << 15, 1 << 23, Quiet),
-                Move::new_old(pawn, 1 << 15, 1 << 31, Quiet),
-                Move::new_old(knight, 1 << 1, 1 << 18, Quiet),
-                Move::new_old(knight, 1 << 1, 1 << 16, Quiet),
-                Move::new_old(knight, 1 << 6, 1 << 23, Quiet),
-                Move::new_old(knight, 1 << 6, 1 << 21, Quiet),
+                mv!(Pawn, White, 8, 16),
+                mv!(Pawn, White, 8, 24),
+                mv!(Pawn, White, 9, 17),
+                mv!(Pawn, White, 9, 25),
+                mv!(Pawn, White, 10, 18),
+                mv!(Pawn, White, 10, 26),
+                mv!(Pawn, White, 11, 19),
+                mv!(Pawn, White, 11, 27),
+                mv!(Pawn, White, 12, 20),
+                mv!(Pawn, White, 12, 28),
+                mv!(Pawn, White, 13, 21),
+                mv!(Pawn, White, 13, 29),
+                mv!(Pawn, White, 14, 22),
+                mv!(Pawn, White, 14, 30),
+                mv!(Pawn, White, 15, 23),
+                mv!(Pawn, White, 15, 31),
+                mv!(Knight, White, 1, 18),
+                mv!(Knight, White, 1, 16),
+                mv!(Knight, White, 6, 23),
+                mv!(Knight, White, 6, 21),
             ],
             board.generate_moves(),
             "board generates initial moves for white player"
@@ -633,8 +672,6 @@ mod test {
 
     #[test]
     fn it_generates_moves_for_queen() {
-        let origin = 0b00001000 << 24;
-        let piece = Piece::new(Kind::Queen, White);
         let board = Board {
             white: Player::new(),
             black: Player::new(),
@@ -650,40 +687,40 @@ mod test {
             board.generate_moves(),
             vec![
                 // North
-                Move::new_old(piece, origin, 1 << 35, Quiet),
-                Move::new_old(piece, origin, 1 << 43, Quiet),
-                Move::new_old(piece, origin, 1 << 51, Quiet),
-                Move::new_old(piece, origin, 1 << 59, Capture),
+                mv!(Queen, White, 27, 35),
+                mv!(Queen, White, 27, 43),
+                mv!(Queen, White, 27, 51),
+                mv!(Queen, White, 27, 59, Capture),
                 // North East
-                Move::new_old(piece, origin, 1 << 36, Quiet),
-                Move::new_old(piece, origin, 1 << 45, Quiet),
-                Move::new_old(piece, origin, 1 << 54, Quiet),
-                Move::new_old(piece, origin, 1 << 63, Quiet),
+                mv!(Queen, White, 27, 36),
+                mv!(Queen, White, 27, 45),
+                mv!(Queen, White, 27, 54),
+                mv!(Queen, White, 27, 63),
                 // East
-                Move::new_old(piece, origin, 1 << 28, Quiet),
-                Move::new_old(piece, origin, 1 << 29, Quiet),
-                Move::new_old(piece, origin, 1 << 30, Quiet),
-                Move::new_old(piece, origin, 1 << 31, Quiet),
+                mv!(Queen, White, 27, 28),
+                mv!(Queen, White, 27, 29),
+                mv!(Queen, White, 27, 30),
+                mv!(Queen, White, 27, 31),
                 // South East
-                Move::new_old(piece, origin, 1 << 20, Quiet),
-                Move::new_old(piece, origin, 1 << 13, Quiet),
-                Move::new_old(piece, origin, 1 << 6, Quiet),
+                mv!(Queen, White, 27, 20),
+                mv!(Queen, White, 27, 13),
+                mv!(Queen, White, 27, 6),
                 // South
-                Move::new_old(piece, origin, 1 << 19, Quiet),
-                Move::new_old(piece, origin, 1 << 11, Quiet),
-                Move::new_old(piece, origin, 1 << 3, Quiet),
+                mv!(Queen, White, 27, 19),
+                mv!(Queen, White, 27, 11),
+                mv!(Queen, White, 27, 3),
                 // South West
-                Move::new_old(piece, origin, 1 << 18, Quiet),
-                Move::new_old(piece, origin, 1 << 9, Quiet),
-                Move::new_old(piece, origin, 1, Quiet),
+                mv!(Queen, White, 27, 18),
+                mv!(Queen, White, 27, 9),
+                mv!(Queen, White, 27, 0),
                 // West
-                Move::new_old(piece, origin, 1 << 26, Quiet),
-                Move::new_old(piece, origin, 1 << 25, Quiet),
-                Move::new_old(piece, origin, 1 << 24, Quiet),
+                mv!(Queen, White, 27, 26),
+                mv!(Queen, White, 27, 25),
+                mv!(Queen, White, 27, 24),
                 // North West
-                Move::new_old(piece, origin, 1 << 34, Quiet),
-                Move::new_old(piece, origin, 1 << 41, Quiet),
-                Move::new_old(piece, origin, 1 << 48, Quiet),
+                mv!(Queen, White, 27, 34),
+                mv!(Queen, White, 27, 41),
+                mv!(Queen, White, 27, 48),
             ]
         )
     }
@@ -720,126 +757,94 @@ mod test {
     fn it_can_castle_short() {
         let mut board = castling_board();
 
-        let w_castle = Move::new_old(Piece::new(King, White), 1 << 4, 1 << 6, CastleShort);
+        let w_castle = mv!(King, White, 4, 6, CastleShort);
 
-        debug_assert_eq!(
+        assert_eq!(
             Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.offset_to() == w_castle.offset_to() && mv.kind() == CastleShort),
+                .find(|mv| mv.dest() == w_castle.dest() && mv.kind() == CastleShort),
             "generates castle move"
         );
 
         assert_eq!(
             Ok(w_castle),
-            board.make_move(
-                w_castle.offset_from() as u32,
-                w_castle.offset_to() as u32,
-                None
-            )
+            board.make_move(w_castle.origin().offset(), w_castle.dest().offset(), None)
         );
 
         assert_eq!(false, board.white.can_castle_short());
         assert_eq!(false, board.white.can_castle_long());
-        assert_eq!(w_castle.bitmap_to(), *board.get_layer(&w_castle.piece()));
+        assert_piece_position(&board, &w_castle.piece(), w_castle.dest());
+        assert_piece_position(&board, &Piece::new(Rook, White), sq!(5));
+
+        let b_castle = mv!(King, Black, 60, 62, CastleShort);
+
         assert_eq!(
-            0b00100001,
-            *board.get_layer(&Piece::new(Rook, White)),
-            "rock is also moved when castled"
-        );
-
-        let b_castle = Move::new_old(Piece::new(King, Black), 1 << 60, 1 << 62, CastleShort);
-
-        debug_assert_eq!(
             Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.offset_to() == mv.offset_to() && mv.kind() == CastleShort),
+                .find(|mv| b_castle.dest() == mv.dest() && mv.kind() == CastleShort),
             "generates castle move"
         );
 
         assert_eq!(
             Ok(b_castle),
-            board.make_move(
-                b_castle.offset_from() as u32,
-                b_castle.offset_to() as u32,
-                None
-            )
+            board.make_move(b_castle.origin().offset(), b_castle.dest().offset(), None)
         );
 
         assert_eq!(false, board.black.can_castle_short());
         assert_eq!(false, board.black.can_castle_long());
-        assert_eq!(b_castle.bitmap_to(), *board.get_layer(&b_castle.piece()));
-        assert_eq!(
-            0b00100001 << 56,
-            *board.get_layer(&Piece::new(Rook, Black)),
-            "rock is also moved when castled"
-        );
+        assert_piece_position(&board, &b_castle.piece(), b_castle.dest());
+        assert_piece_position(&board, &Piece::new(Rook, Black), sq!(61));
     }
 
     #[test]
     fn it_can_castle_long() {
         let mut board = castling_board();
 
-        let w_castle = Move::new_old(Piece::new(King, White), 1 << 4, 1 << 2, CastleLong);
+        let w_castle = mv!(King, White, 4, 2, CastleLong);
 
         debug_assert_eq!(
             Some(&w_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| mv.offset_to() == w_castle.offset_to() && mv.kind() == CastleLong),
+                .find(|mv| mv.dest() == w_castle.dest() && mv.kind() == CastleLong),
             "generates white's castle move"
         );
 
         assert_eq!(
             Ok(w_castle),
-            board.make_move(
-                w_castle.offset_from() as u32,
-                w_castle.offset_to() as u32,
-                None
-            )
+            board.make_move(w_castle.origin().offset(), w_castle.dest().offset(), None)
         );
 
         assert_eq!(false, board.white.can_castle_long());
         assert_eq!(false, board.white.can_castle_short());
-        assert_eq!(w_castle.bitmap_to(), *board.get_layer(&w_castle.piece()));
-        assert_eq!(
-            0b10001000,
-            *board.get_layer(&Piece::new(Rook, White)),
-            "rock is also moved when castled"
-        );
+        assert_piece_position(&board, &w_castle.piece(), w_castle.dest());
+        assert_piece_position(&board, &Piece::new(Rook, White), sq!(3));
 
-        let b_castle = Move::new_old(Piece::new(King, Black), 1 << 60, 1 << 58, CastleLong);
+        let b_castle = mv!(King, Black, 60, 58, CastleLong);
 
         debug_assert_eq!(
             Some(&b_castle),
             board
                 .generate_moves()
                 .iter()
-                .find(|mv| b_castle.offset_to() == mv.offset_to() && mv.kind() == CastleLong),
+                .find(|mv| b_castle.dest() == mv.dest() && mv.kind() == CastleLong),
             "generates black's castle move"
         );
 
         assert_eq!(
             Ok(b_castle),
-            board.make_move(
-                b_castle.offset_from() as u32,
-                b_castle.offset_to() as u32,
-                None
-            )
+            board.make_move(b_castle.origin().offset(), b_castle.dest().offset(), None)
         );
 
         assert_eq!(false, board.black.can_castle_long());
         assert_eq!(false, board.black.can_castle_short());
-        assert_eq!(b_castle.bitmap_to(), *board.get_layer(&b_castle.piece()));
-        assert_eq!(
-            0b10001000 << 56,
-            *board.get_layer(&Piece::new(Rook, Black)),
-            "rock is also moved when castled"
-        );
+        assert_piece_position(&board, &b_castle.piece(), b_castle.dest());
+        assert_piece_position(&board, &Piece::new(Rook, Black), sq!(59));
     }
 
     #[test]
@@ -883,13 +888,11 @@ mod test {
 
     #[test]
     fn it_can_capture_en_passant() {
-        let w_pawn = Piece::new(Pawn, White);
-        let b_pawn = Piece::new(Pawn, Black);
         for tc in [
-            (19, Move::new(w_pawn, 11, 27, PawnDouble, false, false)),
-            (23, Move::new(w_pawn, 15, 31, PawnDouble, false, false)),
-            (43, Move::new(b_pawn, 51, 35, PawnDouble, false, false)),
-            (40, Move::new(b_pawn, 48, 32, PawnDouble, false, false)),
+            (19, mv!(Pawn, White, 11, 27, PawnDouble)),
+            (23, mv!(Pawn, White, 15, 31, PawnDouble)),
+            (43, mv!(Pawn, Black, 51, 35, PawnDouble)),
+            (40, mv!(Pawn, Black, 48, 32, PawnDouble)),
         ] {
             assert_eq!(true, is_capture_en_passant(1 << tc.0, &tc.1))
         }
@@ -897,13 +900,11 @@ mod test {
 
     #[test]
     fn it_can_not_capture_en_passant() {
-        let w_pawn = Piece::new(Pawn, White);
-        let b_pawn = Piece::new(Pawn, Black);
         for tc in [
-            (19, Move::new(w_pawn, 19, 27, Quiet, false, false)),
-            (31, Move::new(w_pawn, 23, 31, PawnDouble, false, false)),
-            (43, Move::new(b_pawn, 43, 35, Quiet, false, false)),
-            (31, Move::new(b_pawn, 40, 32, PawnDouble, false, false)),
+            (19, mv!(Pawn, White, 19, 27)),
+            (31, mv!(Pawn, White, 23, 31, PawnDouble)),
+            (43, mv!(Pawn, Black, 43, 35)),
+            (31, mv!(Pawn, Black, 40, 32, PawnDouble)),
         ] {
             assert_eq!(false, is_capture_en_passant(1 << tc.0, &tc.1))
         }
@@ -913,29 +914,22 @@ mod test {
     fn it_handles_en_passant_pawn_capture() {
         let mut board = Board::initial();
         let w_pawn = Piece::new(Pawn, White);
-        let b_pawn = Piece::new(Pawn, Black);
 
         assert_eq!(
-            Ok(Move::new(w_pawn, 11, 27, PawnDouble, false, false)),
+            Ok(mv!(Pawn, White, 11, 27, PawnDouble)),
             board.make_move(11, 27, None)
         );
 
-        assert_eq!(
-            Ok(Move::new(b_pawn, 55, 47, Quiet, false, false)),
-            board.make_move(55, 47, None)
-        );
+        assert_eq!(Ok(mv!(Pawn, Black, 55, 47)), board.make_move(55, 47, None));
+
+        assert_eq!(Ok(mv!(Pawn, White, 27, 35)), board.make_move(27, 35, None));
 
         assert_eq!(
-            Ok(Move::new(w_pawn, 27, 35, Quiet, false, false)),
-            board.make_move(27, 35, None)
-        );
-
-        assert_eq!(
-            Ok(Move::new(b_pawn, 50, 34, PawnDouble, false, false)),
+            Ok(mv!(Pawn, Black, 50, 34, PawnDouble)),
             board.make_move(50, 34, None)
         );
 
-        let mv = Move::new(w_pawn, 35, 42, EnPassantCapture, false, false);
+        let mv = mv!(Pawn, White, 35, 42, EnPassantCapture);
         match board
             .generate_moves()
             .iter()
@@ -946,11 +940,7 @@ mod test {
         }
 
         assert_eq!(Ok(mv), board.make_move(35, 42, None));
-        assert_eq!(
-            0,
-            board.position.get_layer(&w_pawn) & (1 << 34),
-            "pawn has been removed after en passant capture"
-        )
+        assert_piece_not_in_position(&board, &w_pawn, sq!(34));
     }
 
     #[test]
@@ -966,21 +956,11 @@ mod test {
             history: vec![],
         };
 
-        let mv = Move::new(
-            Piece::new(Pawn, White),
-            52,
-            60,
-            QueenPromotion,
-            false,
-            false,
-        );
+        let mv = mv!(Pawn, White, 52, 60, QueenPromotion);
 
         assert_eq!(Ok(mv), board.make_move(52, 60, Some(Queen)));
-        assert_eq!(0, *board.position.get_layer(&mv.piece()));
-        assert_eq!(
-            1 << 60,
-            *board.position.get_layer(&Piece::new(Queen, White))
-        );
+        assert_piece_not_in_position(&board, &mv.piece(), sq!(60));
+        assert_piece_position(&board, &Piece::new(Queen, White), sq!(60));
     }
 }
 

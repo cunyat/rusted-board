@@ -1,32 +1,32 @@
-use crate::engine::Color;
+use crate::engine::{Color, Square};
 
-fn bishop_attacking(offset: u8) -> u64 {
-    BISHOP_ATTACKS[offset as usize]
+fn bishop_attacking(sq: Square) -> u64 {
+    BISHOP_ATTACKS[*sq.offset() as usize]
 }
 
-fn rock_attacking(offset: u8) -> u64 {
-    ROCK_ATTACKS[offset as usize]
+fn rock_attacking(sq: Square) -> u64 {
+    ROCK_ATTACKS[*sq.offset() as usize]
 }
 
-fn queen_attacking(offset: u8) -> u64 {
-    bishop_attacking(offset) | rock_attacking(offset)
+fn queen_attacking(sq: Square) -> u64 {
+    bishop_attacking(sq) | rock_attacking(sq)
 }
 
-fn knight_attacking(offset: u8) -> u64 {
-    let bb = 1 << offset;
+fn knight_attacking(sq: Square) -> u64 {
+    let bb = sq.bitmap();
     let h1 = ((bb >> 1) & 0x7f7f7f7f7f7f7f7f) | ((bb << 1) & 0xfefefefefefefefe);
     let h2 = ((bb >> 2) & 0x3f3f3f3f3f3f3f3f) | ((bb << 2) & 0xfcfcfcfcfcfcfcfc);
     (h1 << 16) | (h1 >> 16) | (h2 << 8) | (h2 >> 8)
 }
 
-pub fn king_moveset(offset: u8) -> u64 {
-    let bb = 1 << offset;
+pub fn king_moveset(sq: Square) -> u64 {
+    let bb = sq.bitmap();
     let row = ((bb >> 1) & 0x7f7f7f7f7f7f7f7f) | ((bb << 1) & 0xfefefefefefefefe);
     row | (row << 8) | (row >> 8) | (bb << 8) | (bb >> 8)
 }
 
-fn pawn_attacking(offset: u8, color: Color) -> u64 {
-    let bb = 1 << offset;
+fn pawn_attacking(sq: Square, color: Color) -> u64 {
+    let bb = sq.bitmap();
     match color {
         Color::Black => {
             ((bb >> 1) & 0x7f7f7f7f7f7f7f7f) >> 8 | ((bb << 1) & 0xfefefefefefefefe) >> 8
@@ -39,41 +39,37 @@ fn pawn_attacking(offset: u8, color: Color) -> u64 {
 
 #[cfg(test)]
 mod test {
-    use crate::engine::board::draw_layer;
-    use crate::engine::calculated::{
-        bishop_attacking, king_moveset, knight_attacking, pawn_attacking,
-    };
+    use crate::engine::calculated::{king_moveset, knight_attacking, pawn_attacking};
     use crate::engine::Color::{Black, White};
+    use crate::engine::Square;
+    use crate::sq;
 
     #[test]
     fn it_generates_knight_moves() {
-        assert_eq!(0x284400442800, knight_attacking(28));
-        assert_eq!(0x402000, knight_attacking(7));
-        assert_eq!(0x4020000000000, knight_attacking(56))
+        assert_eq!(0x284400442800, knight_attacking(sq!(28)));
+        assert_eq!(0x402000, knight_attacking(sq!(7)));
+        assert_eq!(0x4020000000000, knight_attacking(sq!(56)))
     }
 
     #[test]
     fn it_generates_pawn_moves() {
-        assert_eq!(0x280000, pawn_attacking(12, White));
-        assert_eq!(1 << 22, pawn_attacking(15, White));
-        assert_eq!(1 << 33, pawn_attacking(24, White));
+        assert_eq!(0x280000, pawn_attacking(sq!(12), White));
+        assert_eq!(1 << 22, pawn_attacking(sq!(15), White));
+        assert_eq!(1 << 33, pawn_attacking(sq!(24), White));
 
-        assert_eq!(0x28 << 40, pawn_attacking(52, Black));
-        assert_eq!(1 << 38, pawn_attacking(47, Black));
-        assert_eq!(1 << 25, pawn_attacking(32, Black));
+        assert_eq!(0x28 << 40, pawn_attacking(sq!(52), Black));
+        assert_eq!(1 << 38, pawn_attacking(sq!(47), Black));
+        assert_eq!(1 << 25, pawn_attacking(sq!(32), Black));
     }
 
     #[test]
     fn it_generates_king_attacks() {
-        assert_eq!(0x382838 << 16, king_moveset(28));
-        assert_eq!(0xc040, king_moveset(7));
-        assert_eq!(0x203 << 48, king_moveset(56));
+        assert_eq!(0x382838 << 16, king_moveset(sq!(28)));
+        assert_eq!(0xc040, king_moveset(sq!(7)));
+        assert_eq!(0x203 << 48, king_moveset(sq!(56)));
     }
 
-    #[test]
-    fn it_generates_bishop_attacks() {
-        draw_layer(bishop_attacking(28));
-    }
+    // todo: tests for bishop, rook and queen attacks
 }
 
 const ROCK_ATTACKS: [u64; 64] = [
